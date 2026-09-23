@@ -11,47 +11,35 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-/*
-  ============================
-  DATA
-  ============================
-*/
+const BSD_BASE_URL = "https://sports.bzzoiro.com/api/v2";
 
 function getDate(offsetDays = 0) {
   const date = new Date();
-
   date.setUTCDate(date.getUTCDate() + offsetDays);
-
   return date.toISOString().slice(0, 10);
 }
 
-/*
-  ============================
-  API-FOOTBALL
-  ============================
-*/
-
-async function apiFootball(path) {
-  const key = process.env.API_FOOTBALL_KEY;
+async function bsd(path) {
+  const key = process.env.BSD_API_KEY;
 
   if (!key) {
-    throw new Error("Brak API_FOOTBALL_KEY w Render");
+    throw new Error("Brak BSD_API_KEY w Render");
   }
 
-  const response = await fetch(
-    `https://v3.football.api-sports.io${path}`,
-    {
-      headers: {
-        "x-apisports-key": key
-      }
+  const response = await fetch(`${BSD_BASE_URL}${path}`, {
+    headers: {
+      Authorization: `Token ${key}`,
+      Accept: "application/json"
     }
-  );
+  });
 
   const data = await response.json();
 
   if (!response.ok) {
     const error = new Error(
-      data?.message || `API-Football HTTP ${response.status}`
+      data?.detail ||
+      data?.message ||
+      `BSD HTTP ${response.status}`
     );
 
     error.status = response.status;
@@ -63,66 +51,216 @@ async function apiFootball(path) {
   return data;
 }
 
-/*
-  ============================
-  SPORTMONKS
-  ============================
-*/
-
-async function sportmonks(path) {
-  const token = process.env.SPORTMONKS_API_KEY;
-
-  if (!token) {
-    throw new Error("Brak SPORTMONKS_API_KEY w Render");
-  }
-
-  const separator = path.includes("?") ? "&" : "?";
-
-  const response = await fetch(
-    `https://api.sportmonks.com/v3/football${path}${separator}api_token=${token}`
-  );
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    const error = new Error(
-      data?.message || `Sportmonks HTTP ${response.status}`
-    );
-
-    error.status = response.status;
-    error.data = data;
-
-    throw error;
-  }
-
-  return data;
+function firstArray(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.results)) return data.results;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
 }
 
-/*
-  ============================
-  GŁÓWNY
-  ============================
-*/
+function teamName(team) {
+  if (!team) return "?";
+
+  return (
+    team.name ||
+    team.team_name ||
+    team.short_name ||
+    "?"
+  );
+}
+
+function mapFixture(fixture) {
+  const home =
+    fixture.home_team ||
+    fixture.home ||
+    fixture.teams?.home ||
+    {};
+
+  const away =
+    fixture.away_team ||
+    fixture.away ||
+    fixture.teams?.away ||
+    {};
+
+  return {
+    event:
+      `${teamName(home)} – ${teamName(away)}`,
+
+    league:
+      fixture.league?.name ||
+      fixture.competition?.name ||
+      fixture.league_name ||
+      "Nieznana liga",
+
+    country:
+      fixture.league?.country ||
+      fixture.country ||
+      null,
+
+    fixtureId:
+      fixture.id ||
+      fixture.event_id ||
+      fixture.fixture_id ||
+      null,
+
+    start:
+      fixture.start_time ||
+      fixture.kickoff ||
+      fixture.date ||
+      fixture.event_date ||
+      null,
+
+    status:
+      fixture.status ||
+      fixture.match_status ||
+      null,
+
+    homeTeamId:
+      home.id ||
+      home.team_id ||
+      null,
+
+    awayTeamId:
+      away.id ||
+      away.team_id ||
+      null,
+
+    homeScore:
+      fixture.home_score ??
+      fixture.score?.home ??
+      null,
+
+    awayScore:
+      fixture.away_score ??
+      fixture.score?.away ??
+      null,
+
+    market: "1X2",
+
+    odds: null,
+    probability: null,
+    edge: null,
+
+    liquidity: null,
+    back: null,
+    lay: null,
+    ltp: null,
+
+    ltpDelta: null,
+    volumeDelta: null,
+
+    pressure: "WAITING",
+
+    source: "BSD"
+  };
+}
+
+async function getOdds(eventId) {
+  if (!eventId) return null;
+
+  try {
+    return await bsd(`/events/${eventId}/odds/`);
+  } catch (error) {
+    console.log(
+      `Nie udało się pobrać kursów dla ${eventId}:`,
+      error.message
+    );
+
+    return null;
+  }
+}
+
+function applyOdds(item, oddsData) {
+  if (!oddsData) return item;
+
+  const odds = oddsData.odds || {};
+
+  return {
+    ...item,
+
+    odds: {
+      home: odds.home_win ?? null,
+      draw: odds.draw ?? null,
+      away: odds.away_win ?? null,
+
+      over15: odds.over_15_goals ?? null,
+      over25: odds.over_25_goals ?? null,
+      over35: odds.over_35_goals ?? null,
+
+      under15: odds.under_15_goals ?? null,
+      under25: odds.under_25_goals ?? null,
+      under35: odds.under_35_goals ?? null,
+
+      bttsYes: odds.btts_yes ?? null,
+      bttsNo: odds.btts_no ?? null
+    },
+
+    oddsUpdatedAt:
+      oddsData.last_update_at ||
+      null,
+
+    oddsNextUpdateAt:
+      oddsData.next_update_at ||
+      null
+  };
+}
+
+async function getEventExtras(eventId) {
+  if (!eventId) {
+    return {
+      stats: null,
+      lineups: null,
+      h2h: null,
+      prediction: null,
+      odds: null
+    };
+  }
+
+  const result = {
+    stats: null,
+    lineups: null,
+    h2h: null,
+    prediction: null,
+    odds: null
+  };
+
+  const endpoints = [
+    ["stats", `/events/${eventId}/stats/`],
+    ["lineups", `/events/${eventId}/lineups/`],
+    ["h2h", `/events/${eventId}/h2h/`],
+    ["prediction", `/events/${eventId}/prediction/`],
+    ["odds", `/events/${eventId}/odds/`]
+  ];
+
+  for (const [key, path] of endpoints) {
+    try {
+      result[key] = await bsd(path);
+    } catch (error) {
+      console.log(
+        `BSD ${key} ${eventId}:`,
+        error.message
+      );
+    }
+  }
+
+  return result;
+}
 
 app.get("/", (req, res) => {
   res.json({
     name: "Bet Analyzer Live API",
     status: "online",
-    version: "2.1.0"
+    version: "3.0.0",
+    source: "BSD"
   });
 });
-
-/*
-  ============================
-  HEALTH
-  ============================
-*/
 
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
 
     configured: {
+      bsd: Boolean(process.env.BSD_API_KEY),
       sportmonks: Boolean(process.env.SPORTMONKS_API_KEY),
       apiFootball: Boolean(process.env.API_FOOTBALL_KEY),
       betfair: Boolean(process.env.BETFAIR_API_KEY)
@@ -130,113 +268,78 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-/*
-  ============================
-  API-FOOTBALL TEST
-  ============================
-*/
-
-app.get("/api/api-football-test", async (req, res) => {
+app.get("/api/bsd-test", async (req, res) => {
   try {
     const today = getDate(0);
+    const tomorrow = getDate(1);
 
-    const data = await apiFootball(
-      `/fixtures?date=${today}`
+    const data = await bsd(
+      `/events/?date_from=${today}&date_to=${tomorrow}&limit=50`
     );
 
+    const fixtures = firstArray(data);
+
     res.json({
-      source: "API-FOOTBALL",
-
-      date: today,
-
-      count: (data.response || []).length,
-
-      results: data.response || [],
-
-      errors: data.errors || {},
-
-      paging: data.paging || null
+      source: "BSD",
+      dateFrom: today,
+      dateTo: tomorrow,
+      count: fixtures.length,
+      results: fixtures
     });
 
   } catch (error) {
     res.status(error.status || 500).json({
-      error: "Błąd API-Football",
+      error: "Błąd BSD",
       message: error.message,
       details: error.data || null
     });
   }
 });
 
-/*
-  ============================
-  GŁÓWNY SCAN
-  ============================
-*/
+app.get("/api/live", async (req, res) => {
+  try {
+    const data = await bsd("/events/live/");
+
+    res.json({
+      source: "BSD",
+      count: firstArray(data).length,
+      results: firstArray(data)
+    });
+
+  } catch (error) {
+    res.status(error.status || 500).json({
+      error: "Błąd BSD LIVE",
+      message: error.message,
+      details: error.data || null
+    });
+  }
+});
 
 app.get("/api/scan", async (req, res) => {
   try {
     const today = getDate(0);
     const tomorrow = getDate(1);
 
-    const todayData = await apiFootball(
-      `/fixtures?date=${today}`
+    const data = await bsd(
+      `/events/?date_from=${today}&date_to=${tomorrow}&status=upcoming&limit=200`
     );
 
-    const tomorrowData = await apiFootball(
-      `/fixtures?date=${tomorrow}`
-    );
+    const fixtures = firstArray(data);
 
-    const fixtures = [
-      ...(todayData.response || []),
-      ...(tomorrowData.response || [])
-    ];
+    const results = [];
 
-    const results = fixtures.map((fixture) => ({
-      event:
-        `${fixture.teams?.home?.name || "?"} – ` +
-        `${fixture.teams?.away?.name || "?"}`,
+    for (const fixture of fixtures) {
+      const item = mapFixture(fixture);
 
-      league:
-        fixture.league?.name || "Nieznana liga",
+      const oddsData = await getOdds(item.fixtureId);
 
-      country:
-        fixture.league?.country || null,
-
-      fixtureId:
-        fixture.fixture?.id || null,
-
-      start:
-        fixture.fixture?.date || null,
-
-      status:
-        fixture.fixture?.status?.short || null,
-
-      market: "Mecz",
-
-      odds: null,
-
-      probability: null,
-
-      edge: null,
-
-      liquidity: null,
-
-      back: null,
-
-      lay: null,
-
-      ltp: null,
-
-      ltpDelta: null,
-
-      volumeDelta: null,
-
-      pressure: "WAITING"
-    }));
+      results.push(
+        applyOdds(item, oddsData)
+      );
+    }
 
     res.json({
-      sources: ["API-FOOTBALL"],
-
+      source: "BSD",
       period: {
         start: today,
         end: tomorrow
@@ -249,98 +352,88 @@ app.get("/api/scan", async (req, res) => {
 
   } catch (error) {
     res.status(error.status || 500).json({
-      error: "Błąd skanera",
-
+      error: "Błąd skanera BSD",
       message: error.message,
-
       details: error.data || null
     });
   }
 });
 
-/*
-  ============================
-  SPORTMONKS - LIGI
-  ============================
-*/
-
-app.get("/api/leagues", async (req, res) => {
+app.get("/api/match/:id", async (req, res) => {
   try {
-    const data = await sportmonks(
-      "/leagues?per_page=50"
+    const eventId = req.params.id;
+
+    const data = await bsd(
+      `/events/${eventId}/`
     );
 
-    const leagues = (data.data || []).map((league) => ({
-      id: league.id,
-
-      name: league.name,
-
-      countryId: league.country_id,
-
-      active: league.active
-    }));
+    const extras =
+      await getEventExtras(eventId);
 
     res.json({
-      count: leagues.length,
-
-      leagues
+      source: "BSD",
+      event: data,
+      stats: extras.stats,
+      lineups: extras.lineups,
+      h2h: extras.h2h,
+      prediction: extras.prediction,
+      odds: extras.odds
     });
 
   } catch (error) {
     res.status(error.status || 500).json({
-      error: "Błąd Sportmonks",
-
+      error: "Błąd meczu BSD",
       message: error.message,
-
       details: error.data || null
     });
   }
 });
 
-/*
-  ============================
-  SPORTMONKS - SEZONY
-  ============================
-*/
-
-app.get("/api/seasons", async (req, res) => {
+app.get("/api/odds", async (req, res) => {
   try {
-    const data = await sportmonks(
-      "/seasons?per_page=50"
+    const params = new URLSearchParams();
+
+    if (req.query.event_id) {
+      params.set(
+        "event_id",
+        req.query.event_id
+      );
+    }
+
+    if (req.query.market) {
+      params.set(
+        "market",
+        req.query.market
+      );
+    }
+
+    if (req.query.movement) {
+      params.set(
+        "movement",
+        req.query.movement
+      );
+    }
+
+    params.set("limit", "200");
+
+    const data = await bsd(
+      `/odds/?${params.toString()}`
     );
 
-    const seasons = (data.data || []).map((season) => ({
-      id: season.id,
-
-      name: season.name,
-
-      leagueId: season.league_id,
-
-      isCurrent: season.is_current
-    }));
-
     res.json({
-      count: seasons.length,
-
-      seasons
+      source: "BSD",
+      count: firstArray(data).length,
+      results: firstArray(data)
     });
 
   } catch (error) {
     res.status(error.status || 500).json({
-      error: "Błąd Sportmonks",
-
+      error: "Błąd kursów BSD",
       message: error.message,
-
       details: error.data || null
     });
   }
 });
-
-/*
-  ============================
-  START
-  ============================
-*/
 
 app.listen(PORT, () => {
   console.log(
