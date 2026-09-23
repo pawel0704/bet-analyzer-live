@@ -46,33 +46,88 @@ async function sportmonks(path) {
   return data;
 }
 
+async function apiFootball(path) {
+  const key = process.env.API_FOOTBALL_KEY;
+
+  if (!key) {
+    throw new Error("Brak API_FOOTBALL_KEY w Render");
+  }
+
+  const response = await fetch(
+    `https://v3.football.api-sports.io${path}`,
+    {
+      headers: {
+        "x-apisports-key": key
+      }
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const error = new Error(
+      data?.message || `API-Football HTTP ${response.status}`
+    );
+
+    error.status = response.status;
+    error.data = data;
+
+    throw error;
+  }
+
+  return data;
+}
+
 app.get("/", (req, res) => {
   res.json({
     name: "Bet Analyzer Live API",
     status: "online",
-    version: "1.4.0"
+    version: "2.0.0"
   });
 });
 
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
+
     configured: {
       sportmonks: Boolean(process.env.SPORTMONKS_API_KEY),
+      apiFootball: Boolean(process.env.API_FOOTBALL_KEY),
       betfair: Boolean(process.env.BETFAIR_API_KEY)
     }
   });
 });
 
 /*
-  Pobieramy wszystkie ligi dostępne
-  w aktualnej subskrypcji Sportmonks.
+  TEST API-FOOTBALL
+*/
+app.get("/api/api-football-test", async (req, res) => {
+  try {
+    const data = await apiFootball("/fixtures?next=10");
+
+    res.json({
+      source: "API-FOOTBALL",
+      count: (data.response || []).length,
+      results: data.response || [],
+      errors: data.errors || {},
+      paging: data.paging || null
+    });
+
+  } catch (error) {
+    res.status(error.status || 500).json({
+      error: "Błąd API-Football",
+      message: error.message,
+      details: error.data || null
+    });
+  }
+});
+
+/*
+  SPORTMONKS HEALTH / LIGI
 */
 app.get("/api/leagues", async (req, res) => {
   try {
-    const data = await sportmonks(
-      "/leagues?per_page=50"
-    );
+    const data = await sportmonks("/leagues?per_page=50");
 
     const leagues = (data.data || []).map((league) => ({
       id: league.id,
@@ -96,13 +151,11 @@ app.get("/api/leagues", async (req, res) => {
 });
 
 /*
-  Pobieramy aktualne sezony.
+  SPORTMONKS SEASONS
 */
 app.get("/api/seasons", async (req, res) => {
   try {
-    const data = await sportmonks(
-      "/seasons?per_page=50"
-    );
+    const data = await sportmonks("/seasons?per_page=50");
 
     const seasons = (data.data || []).map((season) => ({
       id: season.id,
@@ -126,89 +179,52 @@ app.get("/api/seasons", async (req, res) => {
 });
 
 /*
-  Pobieramy nadchodzące mecze
-  ze wszystkich lig dostępnych
-  w naszej subskrypcji.
+  GŁÓWNY SCAN
+
+  Na tym etapie korzystamy z API-Football.
+  Pobieramy najbliższe mecze.
 */
 app.get("/api/scan", async (req, res) => {
   try {
-    const startDate = getDate(0);
-    const endDate = getDate(14);
+    const data = await apiFootball("/fixtures?next=50");
 
-    const data = await sportmonks(
-      `/fixtures/between/${startDate}/${endDate}?include=participants;league&order=asc&per_page=50`
-    );
+    const results = (data.response || []).map((fixture) => ({
+      event:
+        `${fixture.teams?.home?.name || "?"} – ` +
+        `${fixture.teams?.away?.name || "?"}`,
 
-    const now = new Date();
+      league:
+        fixture.league?.name || "Nieznana liga",
 
-    const results = (data.data || [])
-      .filter((fixture) => {
-        if (!fixture.starting_at) {
-          return false;
-        }
+      country:
+        fixture.league?.country || null,
 
-        const start = new Date(
-          fixture.starting_at.replace(" ", "T") + "Z"
-        );
+      fixtureId: fixture.fixture?.id || null,
 
-        return start >= now;
-      })
-      .map((fixture) => {
-        const participants = fixture.participants || [];
+      start: fixture.fixture?.date || null,
 
-        const home =
-          participants.find(
-            (team) => team.meta?.location === "home"
-          )?.name || null;
+      status:
+        fixture.fixture?.status?.short || null,
 
-        const away =
-          participants.find(
-            (team) => team.meta?.location === "away"
-          )?.name || null;
+      market: "Mecz",
 
-        return {
-          event:
-            home && away
-              ? `${home} – ${away}`
-              : fixture.name || "Nieznany mecz",
+      odds: null,
+      probability: null,
+      edge: null,
 
-          league:
-            fixture.league?.name ||
-            "Nieznana liga",
+      liquidity: null,
+      back: null,
+      lay: null,
+      ltp: null,
 
-          market: "Mecz",
+      ltpDelta: null,
+      volumeDelta: null,
 
-          odds: null,
-          probability: null,
-          edge: null,
-
-          liquidity: null,
-          back: null,
-          lay: null,
-          ltp: null,
-
-          ltpDelta: null,
-          volumeDelta: null,
-
-          pressure: "WAITING",
-
-          fixtureId: fixture.id,
-          start: fixture.starting_at,
-
-          leagueId: fixture.league_id,
-          seasonId: fixture.season_id,
-
-          hasOdds: Boolean(fixture.has_odds)
-        };
-      });
+      pressure: "WAITING"
+    }));
 
     res.json({
-      sources: ["SPORTMONKS"],
-
-      period: {
-        start: startDate,
-        end: endDate
-      },
+      sources: ["API-FOOTBALL"],
 
       count: results.length,
 
