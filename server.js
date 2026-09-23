@@ -1,24 +1,85 @@
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+
 dotenv.config();
-const app=express();
-app.use(cors({origin:process.env.CORS_ORIGIN||'*'}));
+
+const app = express();
+
+app.use(cors());
 app.use(express.json());
-const BF='https://api.betfair.com/exchange/betting/json-rpc/v1';
-const SM='https://api.sportmonks.com/v3/football/';
-const snapshots=new Map();
-const nowIso=()=>new Date().toISOString();
-function configured(){return {sportmonks:!!process.env.SPORTMONKS_TOKEN,betfair:!!(process.env.BETFAIR_APP_KEY&&process.env.BETFAIR_SESSION_TOKEN)}}
-function bfHeaders(){return {'X-Application':process.env.BETFAIR_APP_KEY||'','X-Authentication':process.env.BETFAIR_SESSION_TOKEN||'','Content-Type':'application/json'}}
-async function bf(method,params){const r=await fetch(BF,{method:'POST',headers:bfHeaders(),body:JSON.stringify([{jsonrpc:'2.0',method:`SportsAPING/v1.0/${method}`,params,id:1}])});const j=await r.json();if(!r.ok||j?.[0]?.error)throw new Error(JSON.stringify(j?.[0]?.error||j));return j?.[0]?.result}
-function sumLadder(arr){return (arr||[]).reduce((s,x)=>s+Number(x.size||0),0)}
-function movement(marketId,book){const old=snapshots.get(marketId);const current={ts:Date.now(),book};snapshots.set(marketId,current);if(!old)return {ltpDelta:null,volumeDelta:null,liquidityDelta:null,backDelta:null,layDelta:null,pressure:'UNKNOWN',ageMs:null};const r=(book.runners||[])[0];if(!r)return {ltpDelta:null,volumeDelta:null,liquidityDelta:null,backDelta:null,layDelta:null,pressure:'UNKNOWN',ageMs:Date.now()-old.ts};const o=(old.book.runners||[]).find(x=>x.selectionId===r.selectionId)||{};const back=sumLadder(r.ex?.availableToBack),lay=sumLadder(r.ex?.availableToLay);const oldBack=sumLadder(o.ex?.availableToBack),oldLay=sumLadder(o.ex?.availableToLay);const vol=sumLadder(r.ex?.tradedVolume),oldVol=sumLadder(o.ex?.tradedVolume);const bd=(r.ex?.availableToBack?.[0]?.price??null);const ld=(r.ex?.availableToLay?.[0]?.price??null);const obd=(o.ex?.availableToBack?.[0]?.price??null);const oldld=(o.ex?.availableToLay?.[0]?.price??null);let pressure='NEUTRAL';if(bd!=null&&obd!=null&&bd<obd)pressure='BUYING';else if(ld!=null&&oldld!=null&&ld>oldld)pressure='LAYING';return {ltpDelta:r.lastPriceTraded!=null&&o.lastPriceTraded!=null?r.lastPriceTraded-o.lastPriceTraded:null,volumeDelta:vol-oldVol,liquidityDelta:(back+lay)-(oldBack+oldLay),backDelta:bd!=null&&obd!=null?bd-obd:null,layDelta:ld!=null&&oldld!=null?ld-oldld:null,pressure,ageMs:Date.now()-old.ts}}
-function implied(price){return price>1?1/price:0}
-function normalizeBook(book){return (book.runners||[]).map(r=>{const back=r.ex?.availableToBack?.[0];const lay=r.ex?.availableToLay?.[0];const price=Number(r.lastPriceTraded||back?.price||lay?.price||0);const liquidity=sumLadder(r.ex?.availableToBack)+sumLadder(r.ex?.availableToLay);return {selectionId:r.selectionId,name:r.runnerName||`Selection ${r.selectionId}`,back:back?.price??null,lay:lay?.price??null,ltp:r.lastPriceTraded??null,liquidity,traded:sumLadder(r.ex?.tradedVolume),price}})}
-app.get('/api/health',(req,res)=>res.json({ok:true,time:nowIso(),configured:configured()}));
-app.get('/api/betfair/search',async(req,res)=>{try{if(!configured().betfair)return res.status(503).json({error:'Betfair credentials missing'});const marketType=req.query.marketType||'MATCH_ODDS';const from=new Date();const to=new Date(Date.now()+24*3600*1000);const filter={eventTypeIds:['1'],marketTypeCodes:[marketType],marketStartTime:{from:from.toISOString(),to:to.toISOString()}};const result=await bf('listMarketCatalogue',{filter,marketProjection:['EVENT','RUNNER_DESCRIPTION','MARKET_START_TIME'],maxResults:100});res.json({data:result||[]})}catch(e){res.status(500).json({error:e.message})}});
-app.get('/api/betfair/book',async(req,res)=>{try{if(!configured().betfair)return res.status(503).json({error:'Betfair credentials missing'});const ids=String(req.query.marketIds||'').split(',').filter(Boolean).slice(0,20);if(!ids.length)return res.status(400).json({error:'marketIds required'});const result=await bf('listMarketBook',{marketIds:ids,priceProjection:{priceData:['EX_BEST_OFFERS','EX_TRADED','EX_LTP'],exBestOffersOverrides:{bestPricesDepth:10}}});res.json({data:(result||[]).map(x=>({...x,movement:movement(x.marketId,x),normalized:normalizeBook(x)}))})}catch(e){res.status(500).json({error:e.message})}});
-app.get('/api/sportmonks/*splat',async(req,res)=>{try{if(!configured().sportmonks)return res.status(503).json({error:'Sportmonks token missing'});const path=Array.isArray(req.params.splat)?req.params.splat.join('/'):(req.params.splat||'');const u=new URL(SM+path);for(const [k,v] of Object.entries(req.query))u.searchParams.set(k,v);u.searchParams.set('api_token',process.env.SPORTMONKS_TOKEN);const r=await fetch(u);res.status(r.status).type('application/json').send(await r.text())}catch(e){res.status(500).json({error:e.message})}});
-app.get('/api/scan',async(req,res)=>{try{if(!configured().betfair)return res.status(503).json({error:'Betfair is not configured yet. Add credentials to backend .env.'});const marketType=req.query.marketType||'MATCH_ODDS';const minProb=Number(req.query.minProb||60),minEdge=Number(req.query.minEdge||3),minLiq=Number(req.query.minLiq||500),limit=Math.min(20,Math.max(1,Number(req.query.limit||10)));const catalogue=await bf('listMarketCatalogue',{filter:{eventTypeIds:['1'],marketTypeCodes:[marketType],marketStartTime:{from:new Date().toISOString(),to:new Date(Date.now()+24*3600*1000).toISOString()}},marketProjection:['EVENT','RUNNER_DESCRIPTION','MARKET_START_TIME'],maxResults:50});const ids=(catalogue||[]).map(x=>x.marketId);if(!ids.length)return res.json({status:'READY',sources:['Betfair Exchange'],results:[],notes:['No matching markets in the next 24 hours.']});const books=await bf('listMarketBook',{marketIds:ids.slice(0,20),priceProjection:{priceData:['EX_BEST_OFFERS','EX_TRADED','EX_LTP'],exBestOffersOverrides:{bestPricesDepth:10}}});const cat=new Map((catalogue||[]).map(x=>[x.marketId,x]));const candidates=[];for(const b of books||[]){const c=cat.get(b.marketId);const mov=movement(b.marketId,b);for(const r of normalizeBook(b)){if(!r.ltp||r.ltp<=1||r.liquidity<minLiq)continue;const p=implied(r.ltp)*100;const movementBoost=mov.pressure==='BUYING'?2:mov.pressure==='LAYING'?-2:0;const prob=Math.min(95,Math.max(1,p+movementBoost));const fair=100/prob;const edge=((r.ltp/fair)-1)*100;const event=c?.event?.name||'Unknown match';const market=c?.marketName||marketType;const signalScore=prob*.45+edge*2+r.liquidity/3000+(mov.volumeDelta>0?2:0)+(mov.pressure==='BUYING'?3:mov.pressure==='LAYING'?-3:0);if(prob>=minProb&&edge>=minEdge)candidates.push({event,market,odds:r.ltp,probability:Number(prob.toFixed(1)),fairOdds:Number(fair.toFixed(2)),edge:Number(edge.toFixed(1)),liquidity:Math.round(r.liquidity),back:r.back,lay:r.lay,ltp:r.ltp,ltpDelta:mov.ltpDelta,volumeDelta:mov.volumeDelta,liquidityDelta:mov.liquidityDelta,pressure:mov.pressure,marketId:b.marketId,selectionId:r.selectionId,signalScore:Number(signalScore.toFixed(2))})}}candidates.sort((a,b)=>b.signalScore-a.signalScore);res.json({status:'READY',sources:['Betfair Exchange'],results:candidates.slice(0,limit),generatedAt:nowIso(),notes:['This MVP derives a market-based estimate from Exchange prices plus movement/liquidity signals. It is not a trained probability model.','Sportmonks can be connected separately for fixtures, lineups, xG, stats and bookmaker data.']})}catch(e){res.status(500).json({error:e.message})}});
-app.listen(process.env.PORT||8080,()=>console.log(`Bet Analyzer backend listening on ${process.env.PORT||8080}`));
+
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.json({
+    name: "Bet Analyzer Live API",
+    status: "online",
+    version: "1.0.0"
+  });
+});
+
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "Backend działa poprawnie",
+    configured: {
+      sportmonks: Boolean(process.env.SPORTMONKS_API_KEY),
+      betfair: Boolean(process.env.BETFAIR_API_KEY)
+    }
+  });
+});
+
+app.get("/api/scan", (req, res) => {
+  res.json({
+    sources: ["DEMO"],
+    results: [
+      {
+        event: "Arsenal – Brighton",
+        market: "1X2: Arsenal",
+        odds: 1.72,
+        probability: 68.4,
+        edge: 5.8,
+        liquidity: 12840,
+        back: 2.31,
+        lay: 2.34,
+        ltp: 2.33,
+        ltpDelta: 0.012,
+        volumeDelta: 1840,
+        pressure: "BUYING"
+      },
+      {
+        event: "Inter – Torino",
+        market: "O 2.5",
+        odds: 1.78,
+        probability: 66.9,
+        edge: 4.7,
+        liquidity: 9120,
+        back: 1.81,
+        lay: 1.83,
+        ltp: 1.82,
+        ltpDelta: -0.018,
+        volumeDelta: 1210,
+        pressure: "BUYING"
+      },
+      {
+        event: "Lech – Jagiellonia",
+        market: "BTTS: TAK",
+        odds: 1.74,
+        probability: 65.7,
+        edge: 4.1,
+        liquidity: 6040,
+        back: 1.76,
+        lay: 1.79,
+        ltp: 1.78,
+        ltpDelta: -0.011,
+        volumeDelta: 980,
+        pressure: "BUYING"
+      }
+    ]
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`Bet Analyzer API running on port ${PORT}`);
+});
