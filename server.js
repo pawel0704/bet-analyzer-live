@@ -11,13 +11,21 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+// =========================
+// BASIC
+// =========================
+
 app.get("/", (req, res) => {
   res.json({
     name: "Bet Analyzer Live API",
     status: "online",
-    version: "1.1.0"
+    version: "1.2.0"
   });
 });
+
+// =========================
+// HEALTH
+// =========================
 
 app.get("/api/health", (req, res) => {
   res.json({
@@ -29,6 +37,10 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+// =========================
+// SPORTMONKS RAW
+// =========================
+
 app.get("/api/sportmonks", async (req, res) => {
   try {
     const token = process.env.SPORTMONKS_API_KEY;
@@ -39,9 +51,24 @@ app.get("/api/sportmonks", async (req, res) => {
       });
     }
 
-    const response = await fetch(
-      `https://api.sportmonks.com/v3/football/fixtures?api_token=${token}&include=participants`
-    );
+    const today = new Date();
+
+    const startDate = today.toISOString().slice(0, 10);
+
+    const futureDate = new Date(today);
+    futureDate.setDate(futureDate.getDate() + 7);
+
+    const endDate = futureDate.toISOString().slice(0, 10);
+
+    const url =
+      `https://api.sportmonks.com/v3/football/fixtures/between/` +
+      `${startDate}/${endDate}` +
+      `?api_token=${token}` +
+      `&include=participants` +
+      `&order=asc` +
+      `&per_page=50`;
+
+    const response = await fetch(url);
 
     const data = await response.json();
 
@@ -49,7 +76,16 @@ app.get("/api/sportmonks", async (req, res) => {
       return res.status(response.status).json(data);
     }
 
-    res.json(data);
+    res.json({
+      period: {
+        start: startDate,
+        end: endDate
+      },
+      data: data.data || [],
+      pagination: data.pagination || null,
+      rate_limit: data.rate_limit || null
+    });
+
   } catch (error) {
     res.status(500).json({
       error: "Błąd połączenia ze Sportmonks",
@@ -57,6 +93,10 @@ app.get("/api/sportmonks", async (req, res) => {
     });
   }
 });
+
+// =========================
+// SCAN
+// =========================
 
 app.get("/api/scan", async (req, res) => {
   try {
@@ -68,9 +108,24 @@ app.get("/api/scan", async (req, res) => {
       });
     }
 
-    const response = await fetch(
-      `https://api.sportmonks.com/v3/football/fixtures?api_token=${token}&include=participants`
-    );
+    const today = new Date();
+
+    const startDate = today.toISOString().slice(0, 10);
+
+    const futureDate = new Date(today);
+    futureDate.setDate(futureDate.getDate() + 7);
+
+    const endDate = futureDate.toISOString().slice(0, 10);
+
+    const url =
+      `https://api.sportmonks.com/v3/football/fixtures/between/` +
+      `${startDate}/${endDate}` +
+      `?api_token=${token}` +
+      `&include=participants` +
+      `&order=asc` +
+      `&per_page=50`;
+
+    const response = await fetch(url);
 
     const data = await response.json();
 
@@ -78,27 +133,70 @@ app.get("/api/scan", async (req, res) => {
       return res.status(response.status).json(data);
     }
 
-    const results = (data.data || []).map((fixture) => ({
-      event: fixture.name || "Nieznany mecz",
-      market: "Mecz",
-      odds: null,
-      probability: null,
-      edge: null,
-      liquidity: null,
-      back: null,
-      lay: null,
-      ltp: null,
-      ltpDelta: null,
-      volumeDelta: null,
-      pressure: "WAITING",
-      fixtureId: fixture.id,
-      start: fixture.starting_at
-    }));
+    const results = (data.data || [])
+      .filter((fixture) => {
+        return fixture.starting_at;
+      })
+      .map((fixture) => {
+
+        const participants = fixture.participants || [];
+
+        const home =
+          participants.find(
+            (team) => team.meta?.location === "home"
+          )?.name || null;
+
+        const away =
+          participants.find(
+            (team) => team.meta?.location === "away"
+          )?.name || null;
+
+        return {
+          event:
+            home && away
+              ? `${home} – ${away}`
+              : fixture.name || "Nieznany mecz",
+
+          market: "Mecz",
+
+          odds: null,
+          probability: null,
+          edge: null,
+
+          liquidity: null,
+          back: null,
+          lay: null,
+          ltp: null,
+
+          ltpDelta: null,
+          volumeDelta: null,
+
+          pressure: "WAITING",
+
+          fixtureId: fixture.id,
+
+          start: fixture.starting_at,
+
+          leagueId: fixture.league_id,
+          seasonId: fixture.season_id,
+
+          hasOdds: Boolean(fixture.has_odds)
+        };
+      });
 
     res.json({
       sources: ["SPORTMONKS"],
+
+      period: {
+        start: startDate,
+        end: endDate
+      },
+
+      count: results.length,
+
       results
     });
+
   } catch (error) {
     res.status(500).json({
       error: "Błąd skanera",
@@ -107,6 +205,12 @@ app.get("/api/scan", async (req, res) => {
   }
 });
 
+// =========================
+// START
+// =========================
+
 app.listen(PORT, () => {
-  console.log(`Bet Analyzer API running on port ${PORT}`);
+  console.log(
+    `Bet Analyzer API running on port ${PORT}`
+  );
 });
