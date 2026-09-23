@@ -9,1423 +9,1729 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
-const BSD_BASE_URL = "https://sports.bzzoiro.com/api/v2";
+const PORT = process.env.PORT || 10000;
 
-function getDate(offsetDays = 0) {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() + offsetDays);
-  return d.toISOString().slice(0, 10);
+const BSD_API_KEY = process.env.BSD_API_KEY;
+const BSD_BASE = "https://sports.bzzoiro.com/api/v2";
+
+const VERSION = "4.2.0";
+const SOURCE = "BSD";
+
+if (!BSD_API_KEY) {
+  console.warn("WARNING: BSD_API_KEY nie jest ustawiony.");
 }
 
-async function bsd(path) {
-  const key = process.env.BSD_API_KEY;
+/* =========================================================
+   BSD REQUEST
+========================================================= */
 
-  if (!key) {
-    throw new Error("Brak BSD_API_KEY w Render");
+async function bsd(path, params = {}) {
+  const url = new URL(`${BSD_BASE}${path}`);
+
+  for (const [key, value] of Object.entries(params)) {
+    if (
+      value !== undefined &&
+      value !== null &&
+      value !== ""
+    ) {
+      url.searchParams.set(key, String(value));
+    }
   }
 
-  const response = await fetch(`${BSD_BASE_URL}${path}`, {
+  const response = await fetch(url, {
     headers: {
-      Authorization: `Token ${key}`,
+      Authorization: `Token ${BSD_API_KEY}`,
       Accept: "application/json"
     }
   });
 
-  const data = await response.json();
+  const text = await response.text();
+
+  let data;
+
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `BSD zwrócił nieprawidłową odpowiedź HTTP ${response.status}`
+    );
+  }
 
   if (!response.ok) {
-    const error = new Error(
-      data?.detail ||
-      data?.message ||
-      `BSD HTTP ${response.status}`
+    throw new Error(
+      `BSD HTTP ${response.status}: ${JSON.stringify(data)}`
     );
-
-    error.status = response.status;
-    error.data = data;
-
-    throw error;
   }
 
   return data;
 }
 
-function arr(data) {
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.results)) return data.results;
-  if (Array.isArray(data?.data)) return data.data;
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function arr(value) {
+  if (Array.isArray(value)) return value;
+
+  if (Array.isArray(value?.results)) return value.results;
+  if (Array.isArray(value?.data)) return value.data;
+  if (Array.isArray(value?.items)) return value.items;
+
   return [];
 }
 
-function clamp(value, min = 0, max = 100) {
+function first(value) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function num(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function impliedProbability(odds) {
-  if (!odds || odds <= 1) return null;
-  return 1 / odds;
+function round(value, decimals = 2) {
+  if (value === null || value === undefined) return null;
+
+  const p = 10 ** decimals;
+  return Math.round(value * p) / p;
 }
 
-function edgePercent(probability, odds) {
-  const implied = impliedProbability(odds);
+function percent(value) {
+  const n = num(value);
+  if (n === null) return null;
 
-  if (probability == null || implied == null) {
+  // BSD predictions mogą występować jako 0.396 albo 39.6
+  if (n <= 1) return round(n * 100, 1);
+
+  return round(n, 1);
+}
+
+function get(obj, paths, fallback = null) {
+  for (const path of paths) {
+    const parts = path.split(".");
+    let current = obj;
+
+    for (const part of parts) {
+      if (
+        current === null ||
+        current === undefined
+      ) {
+        current = undefined;
+        break;
+      }
+
+      current = current[part];
+    }
+
+    if (
+      current !== undefined &&
+      current !== null
+    ) {
+      return current;
+    }
+  }
+
+  return fallback;
+}
+
+function eventName(event) {
+  const home = get(event, [
+    "home_team.name",
+    "home.name",
+    "home_team_name"
+  ], "Home");
+
+  const away = get(event, [
+    "away_team.name",
+    "away.name",
+    "away_team_name"
+  ], "Away");
+
+  return `${home} – ${away}`;
+}
+
+function eventTeams(event) {
+  const homeId = num(get(event, [
+    "home_team.id",
+    "home.id",
+    "home_team_id"
+  ]));
+
+  const awayId = num(get(event, [
+    "away_team.id",
+    "away.id",
+    "away_team_id"
+  ]));
+
+  return {
+    homeId,
+    awayId
+  };
+}
+
+function isoDateDaysAgo(days) {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+function todayUTC() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function tomorrowUTC() {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/* =========================================================
+   PREDICTION
+========================================================= */
+
+function extractPrediction(raw) {
+  const prediction =
+    raw?.prediction ||
+    raw?.data?.prediction ||
+    first(arr(raw));
+
+  if (!prediction) {
     return null;
   }
 
-  return Number(
-    ((probability - implied) * 100).toFixed(2)
-  );
-}
+  const home = percent(get(prediction, [
+    "probabilities.home",
+    "probability.home",
+    "home_probability",
+    "prob_home",
+    "home"
+  ]));
 
-function teamName(team) {
-  if (!team) return "?";
+  const draw = percent(get(prediction, [
+    "probabilities.draw",
+    "probability.draw",
+    "draw_probability",
+    "prob_draw",
+    "draw"
+  ]));
 
-  return (
-    team.name ||
-    team.team_name ||
-    team.short_name ||
-    "?"
-  );
-}
+  const away = percent(get(prediction, [
+    "probabilities.away",
+    "probability.away",
+    "away_probability",
+    "prob_away",
+    "away"
+  ]));
 
-function mapEvent(event) {
-  const home = {
-    id: event.home_team_id,
-    name: event.home_team
-  };
+  const expectedGoalsHome = num(get(prediction, [
+    "expected_goals.home",
+    "expectedGoals.home",
+    "expected_goals_home",
+    "xg_home"
+  ]));
 
-  const away = {
-    id: event.away_team_id,
-    name: event.away_team
-  };
+  const expectedGoalsAway = num(get(prediction, [
+    "expected_goals.away",
+    "expectedGoals.away",
+    "expected_goals_away",
+    "xg_away"
+  ]));
+
+  const over15 = percent(get(prediction, [
+    "over_1_5",
+    "over15",
+    "markets.over_1_5",
+    "markets.over15"
+  ]));
+
+  const over25 = percent(get(prediction, [
+    "over_2_5",
+    "over25",
+    "markets.over_2_5",
+    "markets.over25"
+  ]));
+
+  const over35 = percent(get(prediction, [
+    "over_3_5",
+    "over35",
+    "markets.over_3_5",
+    "markets.over35"
+  ]));
+
+  const bttsYes = percent(get(prediction, [
+    "btts_yes",
+    "bttsYes",
+    "markets.btts_yes",
+    "btts.yes"
+  ]));
+
+  const drawNoBetHome = percent(get(prediction, [
+    "draw_no_bet_home",
+    "drawNoBetHome",
+    "dnb_home"
+  ]));
+
+  const modelConfidence = percent(get(prediction, [
+    "model_confidence",
+    "modelConfidence",
+    "confidence"
+  ]));
+
+  const mostLikelyScore = get(prediction, [
+    "most_likely_score",
+    "mostLikelyScore"
+  ]);
+
+  const predicted = get(prediction, [
+    "predicted",
+    "prediction",
+    "winner"
+  ]);
+
+  const recommendations =
+    prediction.recommendations ||
+    prediction.recommendation ||
+    {};
 
   return {
-    id: event.id,
-
-    event:
-      `${teamName(home)} – ${teamName(away)}`,
-
     home,
+    draw,
     away,
-
-    league: {
-      id: event.league_id,
-      name: event.league_name || null
-    },
-
-    seasonId: event.season_id,
-
-    start:
-      event.event_date ||
-      null,
-
-    status:
-      event.status ||
-      null,
-
-    refereeId:
-      event.referee_id ||
-      null,
-
-    venueId:
-      event.venue_id ||
-      null,
-
-    weather:
-      event.weather ||
-      null,
-
-    h2h:
-      event.head_to_head ||
-      null,
-
-    hasXg:
-      Boolean(event.has_xg)
+    expectedGoalsHome,
+    expectedGoalsAway,
+    over15,
+    over25,
+    over35,
+    bttsYes,
+    drawNoBetHome,
+    modelConfidence,
+    mostLikelyScore,
+    predicted,
+    recommendations
   };
 }
 
-async function getEventDetails(eventId) {
-  const result = {
-    event: null,
-    stats: null,
-    lineups: null,
-    h2h: null,
-    prediction: null,
-    odds: null
-  };
+/* =========================================================
+   LINEUPS
+========================================================= */
 
-  const requests = [
-    ["event", `/events/${eventId}/`],
-    ["stats", `/events/${eventId}/stats/`],
-    ["lineups", `/events/${eventId}/lineups/`],
-    ["h2h", `/events/${eventId}/h2h/`],
-    ["prediction", `/events/${eventId}/prediction/`],
-    ["odds", `/events/${eventId}/odds/`]
-  ];
-
-  const values = await Promise.all(
-    requests.map(async ([name, path]) => {
-      try {
-        return [name, await bsd(path)];
-      } catch (error) {
-        console.log(
-          `BSD ${name} ${eventId}:`,
-          error.message
-        );
-
-        return [name, null];
-      }
-    })
-  );
-
-  for (const [name, value] of values) {
-    result[name] = value;
-  }
-
-  return result;
-}
-
-function extractPrediction(details) {
-  const p = details?.prediction;
-
-  if (!p) return null;
-
-  const markets = p.markets || {};
-
-  return {
-    home:
-      markets.match_result?.prob_home ?? null,
-
-    draw:
-      markets.match_result?.prob_draw ?? null,
-
-    away:
-      markets.match_result?.prob_away ?? null,
-
-    predicted:
-      markets.match_result?.predicted || null,
-
-    expectedGoalsHome:
-      markets.expected_goals?.home ?? null,
-
-    expectedGoalsAway:
-      markets.expected_goals?.away ?? null,
-
-    over15:
-      markets.over_under?.prob_over_15 ?? null,
-
-    over25:
-      markets.over_under?.prob_over_25 ?? null,
-
-    over35:
-      markets.over_under?.prob_over_35 ?? null,
-
-    bttsYes:
-      markets.btts?.prob_yes ?? null,
-
-    mostLikelyScore:
-      markets.score?.most_likely || null,
-
-    drawNoBetHome:
-      markets.draw_no_bet?.prob_home ?? null,
-
-    modelConfidence:
-      p.model?.confidence != null
-        ? Number(
-            (p.model.confidence * 100).toFixed(1)
-          )
-        : null,
-
-    recommendations:
-      p.recommendations || null,
-
-    createdAt:
-      p.created_at || null
-  };
-}
-
-function extractLineups(details) {
-  const data = details?.lineups;
-
-  if (!data) return null;
+function extractLineups(raw) {
+  const data =
+    raw?.lineups ||
+    raw?.data ||
+    raw;
 
   const home =
-    data.lineups?.home || {};
+    data?.home ||
+    data?.home_team ||
+    {};
 
   const away =
-    data.lineups?.away || {};
+    data?.away ||
+    data?.away_team ||
+    {};
+
+  const homePlayers =
+    arr(home.players || home.lineup || home.xi);
+
+  const awayPlayers =
+    arr(away.players || away.lineup || away.xi);
+
+  const unavailableHome =
+    arr(
+      home.unavailable ||
+      home.absent ||
+      home.injured
+    );
+
+  const unavailableAway =
+    arr(
+      away.unavailable ||
+      away.absent ||
+      away.injured
+    );
 
   return {
-    status:
-      data.lineup_status || null,
-
-    updatedAt:
-      data.updated_at || null,
+    status: get(data, [
+      "lineup_status",
+      "status"
+    ], null),
 
     home: {
-      formation:
-        home.formation || null,
-
-      confidence:
-        Number(home.confidence || 0),
-
-      players:
-        home.players || [],
-
-      unavailable:
-        data.unavailable_players?.home ||
-        []
+      formation: get(home, [
+        "formation"
+      ]),
+      confidence: num(get(home, [
+        "confidence",
+        "lineup_confidence"
+      ])),
+      players: homePlayers.length,
+      unavailable: unavailableHome
     },
 
     away: {
-      formation:
-        away.formation || null,
-
-      confidence:
-        Number(away.confidence || 0),
-
-      players:
-        away.players || [],
-
-      unavailable:
-        data.unavailable_players?.away ||
-        []
+      formation: get(away, [
+        "formation"
+      ]),
+      confidence: num(get(away, [
+        "confidence",
+        "lineup_confidence"
+      ])),
+      players: awayPlayers.length,
+      unavailable: unavailableAway
     }
   };
 }
 
-function extractOdds(details) {
-  const data = details?.odds;
+/* =========================================================
+   FORM
+========================================================= */
 
-  if (!data) return null;
+function resultForTeam(match, teamId) {
+  const homeId = num(get(match, [
+    "home_team.id",
+    "home.id",
+    "home_team_id"
+  ]));
 
-  const odds = data.odds || {};
+  const awayId = num(get(match, [
+    "away_team.id",
+    "away.id",
+    "away_team_id"
+  ]));
 
-  return {
-    homeWin:
-      odds.home_win ?? null,
+  const homeScore = num(get(match, [
+    "home_score",
+    "scores.home",
+    "home_goals",
+    "score.home"
+  ]));
 
-    draw:
-      odds.draw ?? null,
-
-    awayWin:
-      odds.away_win ?? null,
-
-    over15:
-      odds.over_15_goals ?? null,
-
-    over25:
-      odds.over_25_goals ?? null,
-
-    over35:
-      odds.over_35_goals ?? null,
-
-    under15:
-      odds.under_15_goals ?? null,
-
-    under25:
-      odds.under_25_goals ?? null,
-
-    under35:
-      odds.under_35_goals ?? null,
-
-    bttsYes:
-      odds.btts_yes ?? null,
-
-    bttsNo:
-      odds.btts_no ?? null,
-
-    updatedAt:
-      data.last_update_at || null,
-
-    nextUpdateAt:
-      data.next_update_at || null
-  };
-}
-
-function unavailableCount(lineups) {
-  if (!lineups) return 0;
-
-  return (
-    (lineups.home?.unavailable?.length || 0) +
-    (lineups.away?.unavailable?.length || 0)
-  );
-}
-
-function lineupConfidence(lineups) {
-  if (!lineups) return 0;
-
-  const home =
-    Number(lineups.home?.confidence || 0);
-
-  const away =
-    Number(lineups.away?.confidence || 0);
-
-  if (!home && !away) return 0;
-
-  return (
-    ((home + away) / 2) * 100
-  );
-}
-
-function h2hStrength(h2h, market) {
-  if (!h2h) return 0;
-
-  const matches =
-    Number(h2h.total_matches || 0);
-
-  if (matches < 3) return 0;
-
-  if (market === "HOME") {
-    return Number(
-      h2h.home_win_rate || 0
-    ) * 100;
-  }
-
-  if (market === "AWAY") {
-    return Number(
-      h2h.away_win_rate || 0
-    ) * 100;
-  }
+  const awayScore = num(get(match, [
+    "away_score",
+    "scores.away",
+    "away_goals",
+    "score.away"
+  ]));
 
   if (
-    market === "OVER15" ||
-    market === "OVER25"
-  ) {
-    const avg =
-      Number(
-        h2h.avg_total_goals || 0
-      );
-
-    if (market === "OVER25") {
-      if (avg >= 3.2) return 100;
-      if (avg >= 2.8) return 75;
-      if (avg >= 2.5) return 50;
-      return 25;
-    }
-
-    if (avg >= 2.5) return 100;
-    if (avg >= 2.1) return 75;
-    if (avg >= 1.8) return 50;
-
-    return 25;
-  }
-
-  return 0;
-}
-
-function candidateProbability(
-  prediction,
-  market
-) {
-  if (!prediction) return null;
-
-  switch (market) {
-    case "HOME":
-      return prediction.home;
-
-    case "DRAW":
-      return prediction.draw;
-
-    case "AWAY":
-      return prediction.away;
-
-    case "OVER15":
-      return prediction.over15;
-
-    case "OVER25":
-      return prediction.over25;
-
-    case "BTTS":
-      return prediction.bttsYes;
-
-    default:
-      return null;
-  }
-}
-
-function candidateOdds(
-  odds,
-  market
-) {
-  if (!odds) return null;
-
-  switch (market) {
-    case "HOME":
-      return odds.homeWin;
-
-    case "DRAW":
-      return odds.draw;
-
-    case "AWAY":
-      return odds.awayWin;
-
-    case "OVER15":
-      return odds.over15;
-
-    case "OVER25":
-      return odds.over25;
-
-    case "BTTS":
-      return odds.bttsYes;
-
-    default:
-      return null;
-  }
-}
-
-function marketLabel(market) {
-  switch (market) {
-    case "HOME":
-      return "1";
-
-    case "DRAW":
-      return "X";
-
-    case "AWAY":
-      return "2";
-
-    case "OVER15":
-      return "Over 1.5";
-
-    case "OVER25":
-      return "Over 2.5";
-
-    case "BTTS":
-      return "BTTS – TAK";
-
-    default:
-      return market;
-  }
-}
-
-function buildCandidate(
-  prediction,
-  odds,
-  market
-) {
-  const probability =
-    candidateProbability(
-      prediction,
-      market
-    );
-
-  const price =
-    candidateOdds(
-      odds,
-      market
-    );
-
-  if (
-    probability == null ||
-    !price ||
-    price <= 1
+    homeScore === null ||
+    awayScore === null
   ) {
     return null;
   }
 
-  const implied =
-    impliedProbability(price);
+  if (homeId === teamId) {
+    if (homeScore > awayScore) return "W";
+    if (homeScore < awayScore) return "L";
+    return "D";
+  }
 
-  const edge =
-    edgePercent(
-      probability / 100,
-      price
-    );
+  if (awayId === teamId) {
+    if (awayScore > homeScore) return "W";
+    if (awayScore < homeScore) return "L";
+    return "D";
+  }
+
+  return null;
+}
+
+function calculateForm(matches, teamId) {
+  const finished = arr(matches)
+    .filter(m => {
+      const status = String(
+        get(m, ["status"], "")
+      ).toLowerCase();
+
+      return (
+        status === "finished" ||
+        status === "ft" ||
+        status === "completed" ||
+        status === "ended"
+      );
+    })
+    .sort((a, b) => {
+      const da = new Date(
+        get(a, ["event_date", "date", "kickoff"], 0)
+      );
+
+      const db = new Date(
+        get(b, ["event_date", "date", "kickoff"], 0)
+      );
+
+      return db - da;
+    });
+
+  const results = [];
+
+  for (const match of finished) {
+    const result = resultForTeam(match, teamId);
+
+    if (result) {
+      results.push(result);
+    }
+
+    if (results.length >= 5) break;
+  }
+
+  const points = results.reduce(
+    (sum, r) => sum + (
+      r === "W" ? 3 :
+      r === "D" ? 1 :
+      0
+    ),
+    0
+  );
 
   return {
-    market,
-    selection:
-      marketLabel(market),
-
-    probability:
-      Number(
-        probability.toFixed(1)
-      ),
-
-    odds:
-      Number(
-        price.toFixed(2)
-      ),
-
-    impliedProbability:
-      Number(
-        (implied * 100).toFixed(1)
-      ),
-
-    edge,
-
-    modelAgreement:
-      false,
-
-    exchangeConfirmation:
-      "NOT_CONNECTED"
+    last5: results,
+    wins: results.filter(x => x === "W").length,
+    draws: results.filter(x => x === "D").length,
+    losses: results.filter(x => x === "L").length,
+    points,
+    maxPoints: results.length * 3,
+    percentage:
+      results.length
+        ? round(points / (results.length * 3) * 100, 1)
+        : null
   };
 }
 
-function recommendationAgreement(
+async function getTeamForm(teamId) {
+  if (!teamId) {
+    return null;
+  }
+
+  try {
+    const data = await bsd(
+      `/teams/${teamId}/fixtures/`,
+      {
+        status: "finished",
+        date_from: isoDateDaysAgo(150),
+        date_to: todayUTC(),
+        limit: 20
+      }
+    );
+
+    return calculateForm(data, teamId);
+  } catch (error) {
+    console.warn(
+      `Form error team ${teamId}:`,
+      error.message
+    );
+
+    return null;
+  }
+}
+
+/* =========================================================
+   REFEREE
+========================================================= */
+
+function extractReferee(raw) {
+  const referee =
+    raw?.referee ||
+    raw?.data ||
+    first(arr(raw));
+
+  if (!referee) {
+    return null;
+  }
+
+  return {
+    id: num(get(referee, ["id"])),
+    name: get(referee, [
+      "name",
+      "full_name"
+    ]),
+    matches: num(get(referee, [
+      "matches",
+      "matches_count"
+    ])),
+    yellowPerMatch: num(get(referee, [
+      "yellow_cards_per_match",
+      "yellow_per_match",
+      "cards_per_match",
+      "yellows_per_match"
+    ])),
+    redPerMatch: num(get(referee, [
+      "red_cards_per_match",
+      "red_per_match"
+    ])),
+    foulsPerMatch: num(get(referee, [
+      "fouls_per_match"
+    ])),
+    penaltiesPerMatch: num(get(referee, [
+      "penalties_per_match"
+    ])),
+    goalsPerMatch: num(get(referee, [
+      "goals_per_match"
+    ]))
+  };
+}
+
+async function getReferee(refereeId) {
+  if (!refereeId) {
+    return null;
+  }
+
+  try {
+    const data = await bsd(
+      `/referees/${refereeId}/`
+    );
+
+    return extractReferee(data);
+  } catch (error) {
+    console.warn(
+      `Referee error ${refereeId}:`,
+      error.message
+    );
+
+    return null;
+  }
+}
+
+/* =========================================================
+   ODDS + MOVEMENT
+========================================================= */
+
+function normalizeOddsRows(raw) {
+  return arr(raw)
+    .map(row => ({
+      bookmaker:
+        get(row, [
+          "bookmaker.name",
+          "bookmaker_name",
+          "bookmaker_slug"
+        ]),
+
+      bookmakerSlug:
+        get(row, [
+          "bookmaker.slug",
+          "bookmaker_slug"
+        ]),
+
+      market:
+        get(row, ["market"]),
+
+      outcome:
+        get(row, ["outcome"]),
+
+      odds: num(get(row, [
+        "decimal_odds",
+        "odds"
+      ])),
+
+      previousOdds: num(get(row, [
+        "previous_decimal_odds"
+      ])),
+
+      openingOdds: num(get(row, [
+        "opening_decimal_odds"
+      ])),
+
+      movement:
+        get(row, ["movement"], null),
+
+      updatedAt:
+        get(row, ["updated_at"], null),
+
+      openingAt:
+        get(row, ["opening_at"], null),
+
+      isMaxQuote:
+        Boolean(get(row, [
+          "is_max_quote"
+        ], false))
+    }))
+    .filter(x => x.odds !== null);
+}
+
+function movementSummary(rows) {
+  const moved = rows.filter(row =>
+    row.previousOdds !== null &&
+    row.odds !== row.previousOdds
+  );
+
+  const shortening = moved.filter(
+    row => row.movement === "SHORTENING"
+  );
+
+  const drifting = moved.filter(
+    row => row.movement === "DRIFTING"
+  );
+
+  return {
+    totalRows: rows.length,
+    moved: moved.length,
+    shortening: shortening.length,
+    drifting: drifting.length
+  };
+}
+
+function selectMarketOdds(rows, market, outcome) {
+  const candidates = rows.filter(row =>
+    row.market === market &&
+    row.outcome === outcome
+  );
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  candidates.sort((a, b) =>
+    (b.odds || 0) - (a.odds || 0)
+  );
+
+  return candidates[0];
+}
+
+function extractOdds(raw) {
+  const rows = normalizeOddsRows(raw);
+
+  const getMarket = (market, outcome) =>
+    selectMarketOdds(rows, market, outcome);
+
+  const home = getMarket("1x2", "HOME");
+  const draw = getMarket("1x2", "DRAW");
+  const away = getMarket("1x2", "AWAY");
+
+  const over15 = getMarket(
+    "over_under_15",
+    "over"
+  );
+
+  const over25 = getMarket(
+    "over_under_25",
+    "over"
+  );
+
+  const over35 = getMarket(
+    "over_under_35",
+    "over"
+  );
+
+  const bttsYes = getMarket(
+    "btts",
+    "yes"
+  );
+
+  return {
+    home,
+    draw,
+    away,
+    over15,
+    over25,
+    over35,
+    bttsYes,
+    rows,
+    movement: movementSummary(rows)
+  };
+}
+
+async function getOdds(eventId) {
+  try {
+    const data = await bsd(
+      `/odds/`,
+      {
+        event_id: eventId,
+        limit: 200
+      }
+    );
+
+    return extractOdds(data);
+  } catch (error) {
+    console.warn(
+      `Odds error event ${eventId}:`,
+      error.message
+    );
+
+    return {
+      home: null,
+      draw: null,
+      away: null,
+      over15: null,
+      over25: null,
+      over35: null,
+      bttsYes: null,
+      rows: [],
+      movement: {
+        totalRows: 0,
+        moved: 0,
+        shortening: 0,
+        drifting: 0
+      }
+    };
+  }
+}
+
+/* =========================================================
+   MARKET / EDGE
+========================================================= */
+
+function impliedProbability(odds) {
+  if (!odds || odds <= 1) {
+    return null;
+  }
+
+  return round(100 / odds, 1);
+}
+
+function edge(modelProbability, odds) {
+  if (
+    modelProbability === null ||
+    odds === null
+  ) {
+    return null;
+  }
+
+  return round(
+    modelProbability - impliedProbability(odds),
+    2
+  );
+}
+
+/* =========================================================
+   CANDIDATES
+========================================================= */
+
+function recommendationForMarket(
   prediction,
   market
 ) {
-  const r =
-    prediction?.recommendations;
-
-  if (!r) return false;
+  const r = prediction?.recommendations || {};
 
   if (market === "HOME") {
-    return (
-      r.favorite === "H" &&
-      r.bet_favorite === true
-    );
-  }
-
-  if (market === "AWAY") {
-    return (
-      r.favorite === "A" &&
-      r.bet_favorite === true
+    return Boolean(
+      r.bet_favorite === true ||
+      r.home === true
     );
   }
 
   if (market === "OVER15") {
-    return r.over_15 === true;
+    return Boolean(
+      r.over_15 === true ||
+      r.over15 === true
+    );
   }
 
   if (market === "OVER25") {
-    return r.over_25 === true;
+    return Boolean(
+      r.over_25 === true ||
+      r.over25 === true
+    );
+  }
+
+  if (market === "OVER35") {
+    return Boolean(
+      r.over_35 === true ||
+      r.over35 === true
+    );
   }
 
   if (market === "BTTS") {
-    return r.btts === true;
+    return Boolean(
+      r.btts === true ||
+      r.btts_yes === true
+    );
   }
 
   return false;
 }
 
-function calculateScore({
-  candidate,
-  prediction,
-  lineups,
-  h2h,
-  event
-}) {
-  if (!candidate) return 0;
+function makeCandidates(prediction, odds) {
+  if (!prediction) {
+    return [];
+  }
 
-  let score = 50;
+  const list = [];
 
-  const p =
-    candidate.probability;
+  const add = (
+    market,
+    selection,
+    probability,
+    quote
+  ) => {
+    if (
+      probability === null ||
+      !quote?.odds
+    ) {
+      return;
+    }
 
-  const edge =
-    candidate.edge || 0;
+    list.push({
+      market,
+      selection,
+      probability,
+      odds: quote.odds,
+      impliedProbability:
+        impliedProbability(quote.odds),
+      edge:
+        edge(probability, quote.odds),
+      movement:
+        quote.movement || null,
+      previousOdds:
+        quote.previousOdds,
+      openingOdds:
+        quote.openingOdds,
+      bookmaker:
+        quote.bookmaker,
+      modelAgreement:
+        recommendationForMarket(
+          prediction,
+          market
+        )
+    });
+  };
 
-  /*
-   * 1. REALISTIC PROBABILITY
-   */
+  add(
+    "HOME",
+    "1",
+    prediction.home,
+    odds.home
+  );
 
-  if (p >= 75) score += 12;
-  else if (p >= 65) score += 8;
-  else if (p >= 60) score += 5;
-  else if (p < 50) score -= 12;
+  add(
+    "DRAW",
+    "X",
+    prediction.draw,
+    odds.draw
+  );
 
-  /*
-   * 2. EDGE
-   *
-   * Ograniczamy wpływ edge,
-   * żeby model nie produkował
-   * absurdalnych typów.
-   */
+  add(
+    "AWAY",
+    "2",
+    prediction.away,
+    odds.away
+  );
 
-  if (edge >= 15) score += 5;
-  else if (edge >= 10) score += 4;
-  else if (edge >= 6) score += 3;
-  else if (edge >= 3) score += 1;
-  else if (edge < 0) score -= 12;
+  add(
+    "OVER15",
+    "Over 1.5",
+    prediction.over15,
+    odds.over15
+  );
 
-  /*
-   * 3. MODEL CONFIDENCE
-   */
+  add(
+    "OVER25",
+    "Over 2.5",
+    prediction.over25,
+    odds.over25
+  );
 
-  const confidence =
-    prediction?.modelConfidence || 0;
+  add(
+    "OVER35",
+    "Over 3.5",
+    prediction.over35,
+    odds.over35
+  );
 
-  if (confidence >= 70) score += 8;
-  else if (confidence >= 60) score += 5;
-  else if (confidence >= 55) score += 2;
-  else if (confidence < 45) score -= 8;
+  add(
+    "BTTS",
+    "BTTS TAK",
+    prediction.bttsYes,
+    odds.bttsYes
+  );
 
-  /*
-   * 4. AGREEMENT Z REKOMENDACJĄ BSD
-   */
+  return list;
+}
+
+/* =========================================================
+   FORM SCORE
+========================================================= */
+
+function formImpact(homeForm, awayForm) {
+  if (
+    !homeForm ||
+    !awayForm ||
+    homeForm.percentage === null ||
+    awayForm.percentage === null
+  ) {
+    return 0;
+  }
+
+  return clamp(
+    (homeForm.percentage -
+      awayForm.percentage) / 10,
+    -5,
+    5
+  );
+}
+
+function movementImpact(candidate) {
+  if (!candidate) {
+    return 0;
+  }
 
   if (
-    candidate.modelAgreement
+    candidate.movement === "SHORTENING"
   ) {
-    score += 7;
+    return 2;
   }
 
-  /*
-   * 5. SKŁADY
-   */
-
-  const lineupConf =
-    lineupConfidence(lineups);
-
-  if (lineupConf >= 70) score += 5;
-  else if (lineupConf >= 60) score += 3;
-  else if (lineupConf >= 50) score += 1;
-  else if (
-    lineups &&
-    lineupConf < 45
+  if (
+    candidate.movement === "DRIFTING"
   ) {
-    score -= 5;
+    return -2;
   }
 
-  /*
-   * 6. ABSENCJE
-   */
+  return 0;
+}
 
-  const missing =
-    unavailableCount(lineups);
-
-  if (missing === 0) {
-    score += 3;
-  } else if (missing <= 2) {
-    score += 1;
-  } else if (missing >= 4) {
-    score -= 6;
+function refereeImpact(referee, market) {
+  if (!referee) {
+    return 0;
   }
 
-  /*
-   * 7. H2H
-   */
+  if (
+    market === "BTTS" &&
+    referee.goalsPerMatch !== null
+  ) {
+    return clamp(
+      (referee.goalsPerMatch - 2.5) * 2,
+      -3,
+      3
+    );
+  }
 
-  const h2hValue =
-    h2hStrength(
-      h2h,
+  if (
+    market.startsWith("OVER") &&
+    referee.goalsPerMatch !== null
+  ) {
+    return clamp(
+      (referee.goalsPerMatch - 2.5) * 1.5,
+      -3,
+      3
+    );
+  }
+
+  return 0;
+}
+
+/* =========================================================
+   CLASSIFICATION
+========================================================= */
+
+function analyzeCandidate(
+  candidate,
+  context
+) {
+  const {
+    prediction,
+    homeForm,
+    awayForm,
+    referee,
+    lineups
+  } = context;
+
+  let score = 0;
+
+  const reasons = [];
+  const warnings = [];
+
+  const probability = candidate.probability;
+  const edgeValue = candidate.edge;
+
+  /* probability */
+
+  if (probability >= 80) {
+    score += 25;
+    reasons.push(
+      "bardzo wysokie prawdopodobieństwo modelu"
+    );
+  } else if (probability >= 70) {
+    score += 21;
+    reasons.push(
+      "wysokie prawdopodobieństwo modelu"
+    );
+  } else if (probability >= 60) {
+    score += 16;
+    reasons.push(
+      "dobre prawdopodobieństwo modelu"
+    );
+  } else if (probability >= 55) {
+    score += 10;
+  }
+
+  /* edge */
+
+  if (edgeValue !== null) {
+    if (edgeValue >= 10) {
+      score += 22;
+      reasons.push(
+        "wyraźnie dodatni edge względem kursu"
+      );
+    } else if (edgeValue >= 5) {
+      score += 17;
+      reasons.push(
+        "dodatni edge względem kursu"
+      );
+    } else if (edgeValue >= 2) {
+      score += 10;
+      reasons.push(
+        "niewielki dodatni edge"
+      );
+    } else if (edgeValue < 0) {
+      score -= 18;
+      warnings.push(
+        "kurs implikuje wyższe prawdopodobieństwo niż model"
+      );
+    }
+  }
+
+  /* BSD recommendation */
+
+  if (candidate.modelAgreement) {
+    score += 10;
+    reasons.push(
+      "zgodność z rekomendacją modelu BSD"
+    );
+  } else {
+    score -= 4;
+    warnings.push(
+      "brak potwierdzenia typu przez rekomendację BSD"
+    );
+  }
+
+  /* form */
+
+  const formDiff = formImpact(
+    homeForm,
+    awayForm
+  );
+
+  if (candidate.market === "HOME") {
+    score += clamp(formDiff * 2, -8, 8);
+  }
+
+  if (candidate.market === "AWAY") {
+    score -= clamp(formDiff * 2, -8, 8);
+  }
+
+  if (
+    Math.abs(formDiff) >= 2
+  ) {
+    reasons.push(
+      "forma ostatnich meczów uwzględniona"
+    );
+  }
+
+  /* referee */
+
+  const refImpact =
+    refereeImpact(
+      referee,
       candidate.market
     );
 
-  if (h2hValue >= 75) {
-    score += 4;
-  } else if (
-    h2hValue >= 60
+  score += refImpact;
+
+  if (
+    referee &&
+    referee.goalsPerMatch !== null
   ) {
-    score += 2;
-  }
-
-  /*
-   * 8. xG
-   */
-
-  const xgHome =
-    Number(
-      prediction?.expectedGoalsHome || 0
+    reasons.push(
+      `sędzia: ${referee.goalsPerMatch} gola/mecz`
     );
+  }
 
-  const xgAway =
-    Number(
-      prediction?.expectedGoalsAway || 0
+  /* movement */
+
+  const moveImpact =
+    movementImpact(candidate);
+
+  score += moveImpact;
+
+  if (
+    candidate.movement === "SHORTENING"
+  ) {
+    reasons.push(
+      "kurs skraca się"
     );
-
-  const totalXg =
-    xgHome + xgAway;
-
-  if (
-    candidate.market === "OVER25"
-  ) {
-    if (totalXg >= 3.0) score += 5;
-    else if (totalXg >= 2.7) score += 3;
-    else if (totalXg < 2.3) score -= 5;
   }
 
   if (
-    candidate.market === "OVER15"
+    candidate.movement === "DRIFTING"
   ) {
-    if (totalXg >= 2.4) score += 4;
-    else if (totalXg >= 2.1) score += 2;
+    warnings.push(
+      "kurs dryfuje przeciwko typowi"
+    );
   }
 
-  /*
-   * 9. WEATHER
-   */
+  /* lineup */
+
+  const homeConfidence =
+    num(lineups?.home?.confidence);
+
+  const awayConfidence =
+    num(lineups?.away?.confidence);
+
+  const unavailable =
+    (lineups?.home?.unavailable?.length || 0) +
+    (lineups?.away?.unavailable?.length || 0);
 
   if (
-    event?.weather?.wind_speed != null &&
-    Number(event.weather.wind_speed) >= 30
+    homeConfidence !== null &&
+    awayConfidence !== null
   ) {
-    score -= 3;
+    const avg =
+      (homeConfidence + awayConfidence) / 2;
+
+    if (avg >= 0.7) {
+      score += 7;
+    } else if (avg >= 0.5) {
+      score += 3;
+    } else {
+      score -= 4;
+      warnings.push(
+        "niska pewność przewidywanych składów"
+      );
+    }
   }
 
-  return Number(
-    clamp(score).toFixed(1)
-  );
-}
-
-function classify(
-  score,
-  candidate,
-  prediction
-) {
-  if (!candidate) {
-    return "REJECT";
+  if (unavailable >= 4) {
+    score -= 5;
+    warnings.push(
+      `dużo niedostępnych zawodników (${unavailable})`
+    );
   }
 
-  const p =
-    candidate.probability;
-
-  const edge =
-    candidate.edge || 0;
+  /* model confidence */
 
   const confidence =
-    prediction?.modelConfidence || 0;
+    prediction?.modelConfidence;
 
-  /*
-   * TOP:
-   * kilka warunków musi być
-   * spełnionych jednocześnie.
-   */
-
-  if (
-    score >= 78 &&
-    p >= 65 &&
-    edge >= 4 &&
-    confidence >= 55 &&
-    candidate.modelAgreement
-  ) {
-    return "TOP";
-  }
-
-  /*
-   * WATCH:
-   * interesujący, ale jeszcze
-   * nie spełnia wszystkich
-   * warunków.
-   */
-
-  if (
-    score >= 65 &&
-    p >= 58 &&
-    edge >= 2 &&
-    confidence >= 50
-  ) {
-    return "WATCH";
-  }
-
-  return "REJECT";
-}
-
-function reasons(
-  candidate,
-  prediction,
-  lineups,
-  h2h
-) {
-  const result = [];
-
-  if (
-    candidate.probability >= 70
-  ) {
-    result.push(
-      "wysokie prawdopodobieństwo modelu"
-    );
-  } else if (
-    candidate.probability >= 60
-  ) {
-    result.push(
-      "dobre prawdopodobieństwo modelu"
-    );
-  }
-
-  if (
-    candidate.edge >= 8
-  ) {
-    result.push(
-      "dodatni edge względem kursu"
-    );
-  }
-
-  if (
-    candidate.modelAgreement
-  ) {
-    result.push(
-      "zgodność z rekomendacją BSD"
-    );
-  }
-
-  if (
-    prediction?.expectedGoalsHome != null &&
-    prediction?.expectedGoalsAway != null
-  ) {
-    result.push(
-      `xG ${prediction.expectedGoalsHome} – ${prediction.expectedGoalsAway}`
-    );
-  }
-
-  if (
-    lineups &&
-    lineupConfidence(lineups) >= 60
-  ) {
-    result.push(
-      "przewidywane składy mają dobrą pewność"
-    );
-  }
-
-  if (
-    h2h &&
-    h2h.total_matches >= 5
-  ) {
-    result.push(
-      "dostępna większa próbka H2H"
-    );
-  }
-
-  return result;
-}
-
-function warnings(
-  candidate,
-  prediction,
-  lineups
-) {
-  const result = [];
-
-  if (
-    candidate.edge >= 15
-  ) {
-    result.push(
-      "bardzo duży edge modelowy — wymaga potwierdzenia rynkiem"
-    );
-  }
-
-  if (
-    prediction?.modelConfidence != null &&
-    prediction.modelConfidence < 55
-  ) {
-    result.push(
-      "niska pewność modelu"
-    );
-  }
-
-  if (
-    lineups &&
-    lineupConfidence(lineups) < 50
-  ) {
-    result.push(
-      "niska pewność przewidywanych składów"
-    );
-  }
-
-  if (
-    !lineups ||
-    lineups.status !== "confirmed"
-  ) {
-    result.push(
-      "składy nie są jeszcze potwierdzone"
-    );
-  }
-
-  result.push(
-    "Betfair Exchange nie jest jeszcze podłączony"
-  );
-
-  return result;
-}
-
-function analyzeEvent(
-  event,
-  details
-) {
-  const prediction =
-    extractPrediction(details);
-
-  const odds =
-    extractOdds(details);
-
-  const lineups =
-    extractLineups(details);
-
-  const h2h =
-    details.h2h ||
-    event.h2h ||
-    null;
-
-  if (!prediction || !odds) {
-    return {
-      eventId: event.id,
-      event: event.event,
-      league: event.league,
-      start: event.start,
-      status: event.status,
-      classification: "REJECT",
-      score: 0,
-      reason:
-        "Brak kompletu predykcji lub kursów",
-      candidates: []
-    };
-  }
-
-  const markets = [
-    "HOME",
-    "DRAW",
-    "AWAY",
-    "OVER15",
-    "OVER25",
-    "BTTS"
-  ];
-
-  const candidates = [];
-
-  for (const market of markets) {
-    const candidate =
-      buildCandidate(
-        prediction,
-        odds,
-        market
+  if (confidence !== null) {
+    if (confidence >= 70) {
+      score += 8;
+    } else if (confidence >= 55) {
+      score += 5;
+    } else if (confidence < 45) {
+      score -= 5;
+      warnings.push(
+        "niska pewność modelu"
       );
-
-    if (!candidate) {
-      continue;
     }
-
-    candidate.modelAgreement =
-      recommendationAgreement(
-        prediction,
-        market
-      );
-
-    candidate.score =
-      calculateScore({
-        candidate,
-        prediction,
-        lineups,
-        h2h,
-        event
-      });
-
-    candidate.classification =
-      classify(
-        candidate.score,
-        candidate,
-        prediction
-      );
-
-    candidate.reasons =
-      reasons(
-        candidate,
-        prediction,
-        lineups,
-        h2h
-      );
-
-    candidate.warnings =
-      warnings(
-        candidate,
-        prediction,
-        lineups
-      );
-
-    candidates.push(candidate);
   }
 
-  candidates.sort(
-    (a, b) =>
-      b.score - a.score
+  /* final */
+
+  score = Math.round(
+    clamp(score, 0, 100)
   );
 
-  const top =
-    candidates.filter(
-      x =>
-        x.classification ===
-        "TOP"
-    );
+  let classification = "REJECT";
 
-  const watch =
-    candidates.filter(
-      x =>
-        x.classification ===
-        "WATCH"
-    );
+  /*
+    TOP:
+    Nie wystarczy sama wysoka prognoza.
+    Potrzebne są:
+    - >= 65%
+    - dodatni edge >= 4
+    - model confidence >= 50
+    - brak dryfu
+  */
+
+  if (
+    probability >= 65 &&
+    edgeValue !== null &&
+    edgeValue >= 4 &&
+    (confidence === null ||
+      confidence >= 50) &&
+    candidate.movement !== "DRIFTING" &&
+    score >= 72
+  ) {
+    classification = "TOP";
+  } else if (
+    probability >= 55 &&
+    edgeValue !== null &&
+    edgeValue >= 2 &&
+    score >= 60
+  ) {
+    classification = "WATCH";
+  }
+
+  /*
+    Bardzo ważne:
+    jeśli BSD nie rekomenduje typu,
+    TOP wymaga wyższego progu.
+  */
+
+  if (
+    classification === "TOP" &&
+    !candidate.modelAgreement
+  ) {
+    if (
+      score < 80 ||
+      edgeValue < 8
+    ) {
+      classification = "WATCH";
+      warnings.push(
+        "TOP wymaga dodatkowego potwierdzenia, ponieważ BSD nie rekomenduje tego rynku"
+      );
+    }
+  }
+
+  /*
+    Ucinamy typy bez realnej przewagi.
+  */
+
+  if (
+    edgeValue !== null &&
+    edgeValue < 0
+  ) {
+    classification = "REJECT";
+  }
 
   return {
-    eventId: event.id,
-
-    event: event.event,
-
-    league: event.league,
-
-    start: event.start,
-
-    status: event.status,
-
-    refereeId:
-      event.refereeId,
-
-    weather:
-      event.weather,
-
-    prediction,
-
-    odds,
-
-    lineups,
-
-    h2h,
-
-    bestPick:
-      candidates[0] || null,
-
-    top,
-
-    watch,
-
-    candidates,
-
-    score:
-      candidates[0]?.score || 0,
-
-    classification:
-      top.length > 0
-        ? "TOP"
-        : watch.length > 0
-          ? "WATCH"
-          : "REJECT"
+    ...candidate,
+    score,
+    classification,
+    reasons,
+    warnings,
+    formDifference: round(formDiff, 2),
+    refereeImpact: round(refImpact, 2),
+    movementImpact: moveImpact
   };
 }
 
-app.get("/", (req, res) => {
-  res.json({
-    name:
-      "Bet Analyzer Live API",
+/* =========================================================
+   EVENT ANALYSIS
+========================================================= */
 
-    status:
-      "online",
+async function analyzeEvent(event) {
+  const eventId = num(
+    get(event, ["id", "event_id"])
+  );
 
-    version:
-      "4.1.0",
+  const { homeId, awayId } =
+    eventTeams(event);
 
-    source:
-      "BSD",
+  const refereeId = num(
+    get(event, [
+      "referee.id",
+      "referee_id"
+    ])
+  );
 
-    exchange:
-      "NOT_CONNECTED"
-  });
-});
+  const [
+    details,
+    stats,
+    lineupsRaw,
+    h2h,
+    predictionRaw,
+    odds,
+    homeForm,
+    awayForm,
+    referee
+  ] = await Promise.all([
+    bsd(`/events/${eventId}/`),
+    bsd(`/events/${eventId}/stats/`)
+      .catch(() => null),
+    bsd(`/events/${eventId}/lineups/`)
+      .catch(() => null),
+    bsd(`/events/${eventId}/h2h/`)
+      .catch(() => null),
+    bsd(`/events/${eventId}/prediction/`)
+      .catch(() => null),
+    getOdds(eventId),
+    getTeamForm(homeId),
+    getTeamForm(awayId),
+    getReferee(refereeId)
+  ]);
 
-app.get(
-  "/api/health",
-  (req, res) => {
-    res.json({
-      status: "ok",
+  const prediction =
+    extractPrediction(predictionRaw);
 
-      configured: {
-        bsd:
-          Boolean(
-            process.env.BSD_API_KEY
-          ),
+  const lineups =
+    extractLineups(lineupsRaw);
 
-        sportmonks:
-          Boolean(
-            process.env.SPORTMONKS_API_KEY
-          ),
+  const candidates =
+    makeCandidates(
+      prediction,
+      odds
+    );
 
-        apiFootball:
-          Boolean(
-            process.env.API_FOOTBALL_KEY
-          ),
+  const analyzedCandidates =
+    candidates.map(candidate =>
+      analyzeCandidate(
+        candidate,
+        {
+          prediction,
+          homeForm,
+          awayForm,
+          referee,
+          lineups
+        }
+      )
+    );
 
-        betfair:
-          Boolean(
-            process.env.BETFAIR_API_KEY
-          )
+  analyzedCandidates.sort(
+    (a, b) => b.score - a.score
+  );
+
+  return {
+    eventId,
+    event: eventName(details || event),
+
+    date: get(
+      details || event,
+      [
+        "event_date",
+        "date",
+        "kickoff"
+      ]
+    ),
+
+    status: get(
+      details || event,
+      ["status"]
+    ),
+
+    league: get(
+      details || event,
+      [
+        "league.name",
+        "league_name"
+      ]
+    ),
+
+    leagueId: num(
+      get(details || event, [
+        "league.id",
+        "league_id"
+      ])
+    ),
+
+    seasonId: num(
+      get(details || event, [
+        "season.id",
+        "season_id"
+      ])
+    ),
+
+    referee: {
+      id: refereeId,
+      ...referee
+    },
+
+    prediction,
+
+    form: {
+      home: homeForm,
+      away: awayForm
+    },
+
+    lineups,
+
+    odds: {
+      movement: odds.movement,
+      markets: {
+        home: odds.home,
+        draw: odds.draw,
+        away: odds.away,
+        over15: odds.over15,
+        over25: odds.over25,
+        over35: odds.over35,
+        bttsYes: odds.bttsYes
       }
+    },
+
+    stats,
+
+    h2h,
+
+    candidates: analyzedCandidates,
+
+    bestPick:
+      analyzedCandidates[0] || null
+  };
+}
+
+/* =========================================================
+   EVENTS
+========================================================= */
+
+async function getUpcomingEvents() {
+  const start = todayUTC();
+  const end = tomorrowUTC();
+
+  const data = await bsd(
+    `/events/`,
+    {
+      date_from: start,
+      date_to: end,
+      status: "upcoming",
+      limit: 100
+    }
+  );
+
+  return arr(data)
+    .filter(event => {
+      const status = String(
+        get(event, ["status"], "")
+      ).toLowerCase();
+
+      return (
+        status !== "postponed" &&
+        status !== "cancelled" &&
+        status !== "unresolved"
+      );
     });
-  }
-);
+}
 
-app.get(
-  "/api/scan",
-  async (req, res) => {
-    try {
-      const today =
-        getDate(0);
+/* =========================================================
+   SCAN
+========================================================= */
 
-      const tomorrow =
-        getDate(1);
+app.get("/api/scan", async (req, res) => {
+  try {
+    const events =
+      await getUpcomingEvents();
 
-      const data =
-        await bsd(
-          `/events/?date_from=${today}&date_to=${tomorrow}&status=upcoming&limit=100`
+    /*
+      Limit chronologiczny.
+      Nie analizujemy bez potrzeby setek meczów.
+    */
+
+    const selected =
+      events.slice(0, 30);
+
+    const results = [];
+
+    for (const event of selected) {
+      try {
+        const analysis =
+          await analyzeEvent(event);
+
+        results.push(analysis);
+      } catch (error) {
+        console.warn(
+          `Event ${event.id} failed:`,
+          error.message
+        );
+      }
+    }
+
+    const allCandidates =
+      results.flatMap(
+        item => item.candidates || []
+      );
+
+    const top =
+      allCandidates
+        .filter(
+          x => x.classification === "TOP"
+        )
+        .sort(
+          (a, b) => b.score - a.score
         );
 
-      const events =
-        arr(data)
-          .filter(
-            e =>
-              e.status ===
-              "notstarted"
-          )
-          .map(mapEvent);
+    const watch =
+      allCandidates
+        .filter(
+          x => x.classification === "WATCH"
+        )
+        .sort(
+          (a, b) => b.score - a.score
+        );
 
-      const analyses = [];
+    const rejected =
+      allCandidates.filter(
+        x => x.classification === "REJECT"
+      );
 
-      /*
-       * Limitujemy liczbę meczów,
-       * żeby nie zabić darmowego API.
-       */
+    /*
+      Łączymy kandydatów z eventami,
+      żeby frontend dostał nazwę meczu.
+    */
 
-      const selected =
-        events.slice(0, 30);
+    const eventMap =
+      new Map(
+        results.map(
+          item => [item.eventId, item]
+        )
+      );
 
-      for (
-        const event of selected
-      ) {
-        try {
-          const details =
-            await getEventDetails(
-              event.id
+    function enrich(list) {
+      return list.map(item => {
+        const event =
+          [...eventMap.values()]
+            .find(e =>
+              e.candidates?.some(
+                c =>
+                  c.market === item.market &&
+                  c.selection === item.selection
+              )
             );
 
-          const analysis =
-            analyzeEvent(
-              event,
-              details
-            );
+        return {
+          eventId:
+            event?.eventId ?? null,
 
-          analyses.push(
-            analysis
-          );
-        } catch (error) {
-          console.log(
-            `Analiza ${event.id}:`,
-            error.message
-          );
-        }
-      }
+          event:
+            event?.event ?? "Unknown",
 
-      analyses.sort(
-        (a, b) =>
-          b.score - a.score
-      );
+          date:
+            event?.date ?? null,
 
-      const top = [];
+          league:
+            event?.league ?? null,
 
-      const watch = [];
-
-      for (
-        const analysis
-        of analyses
-      ) {
-        for (
-          const candidate
-          of analysis.candidates || []
-        ) {
-          if (
-            candidate.classification ===
-            "TOP"
-          ) {
-            top.push({
-              eventId:
-                analysis.eventId,
-
-              event:
-                analysis.event,
-
-              league:
-                analysis.league,
-
-              start:
-                analysis.start,
-
-              ...candidate
-            });
-          }
-
-          if (
-            candidate.classification ===
-            "WATCH"
-          ) {
-            watch.push({
-              eventId:
-                analysis.eventId,
-
-              event:
-                analysis.event,
-
-              league:
-                analysis.league,
-
-              start:
-                analysis.start,
-
-              ...candidate
-            });
-          }
-        }
-      }
-
-      top.sort(
-        (a, b) =>
-          b.score - a.score
-      );
-
-      watch.sort(
-        (a, b) =>
-          b.score - a.score
-      );
-
-      res.json({
-        source: "BSD",
-
-        version:
-          "4.1.0",
-
-        exchange:
-          "NOT_CONNECTED",
-
-        period: {
-          start: today,
-          end: tomorrow
-        },
-
-        totalEvents:
-          events.length,
-
-        analyzed:
-          analyses.length,
-
-        top:
-          top.slice(0, 10),
-
-        watch:
-          watch.slice(0, 20),
-
-        rejected:
-          analyses.filter(
-            x =>
-              x.classification ===
-              "REJECT"
-          ).length,
-
-        all:
-          analyses
-      });
-
-    } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        error:
-          "Błąd analizatora BSD",
-
-        message:
-          error.message,
-
-        details:
-          error.data || null
+          ...item
+        };
       });
     }
+
+    const topOut =
+      enrich(top);
+
+    const watchOut =
+      enrich(watch);
+
+    const rejectedOut =
+      enrich(rejected);
+
+    res.json({
+      source: SOURCE,
+      version: VERSION,
+
+      exchange:
+        "NOT_CONNECTED",
+
+      period: {
+        start: startDate(),
+        end: tomorrowUTC()
+      },
+
+      totalEvents:
+        events.length,
+
+      analyzed:
+        results.length,
+
+      top:
+        topOut,
+
+      watch:
+        watchOut,
+
+      rejected:
+        rejectedOut,
+
+      all:
+        results,
+
+      generatedAt:
+        new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error(
+      "SCAN ERROR:",
+      error
+    );
+
+    res.status(500).json({
+      source: SOURCE,
+      version: VERSION,
+      error: error.message
+    });
   }
-);
+});
+
+function startDate() {
+  return todayUTC();
+}
+
+/* =========================================================
+   SINGLE MATCH
+========================================================= */
 
 app.get(
   "/api/match/:id",
   async (req, res) => {
     try {
       const eventId =
-        req.params.id;
+        Number(req.params.id);
+
+      if (!Number.isFinite(eventId)) {
+        return res.status(400).json({
+          error: "Nieprawidłowe event ID"
+        });
+      }
 
       const event =
         await bsd(
           `/events/${eventId}/`
         );
 
-      const details =
-        await getEventDetails(
-          eventId
-        );
-
-      const analysis =
-        analyzeEvent(
-          mapEvent(event),
-          details
-        );
+      const result =
+        await analyzeEvent(event);
 
       res.json({
-        source:
-          "BSD",
-
-        version:
-          "4.1.0",
-
-        analysis
+        source: SOURCE,
+        version: VERSION,
+        exchange:
+          "NOT_CONNECTED",
+        ...result
       });
 
     } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        error:
-          "Błąd analizy meczu",
+      console.error(
+        "MATCH ERROR:",
+        error
+      );
 
-        message:
-          error.message,
-
-        details:
-          error.data || null
+      res.status(500).json({
+        error: error.message
       });
     }
   }
 );
+
+/* =========================================================
+   BSD TEST
+========================================================= */
 
 app.get(
   "/api/bsd-test",
   async (req, res) => {
     try {
-      const today =
-        getDate(0);
-
-      const tomorrow =
-        getDate(1);
-
       const data =
         await bsd(
-          `/events/?date_from=${today}&date_to=${tomorrow}&limit=50`
+          `/events/`,
+          {
+            date_from: todayUTC(),
+            date_to: tomorrowUTC(),
+            limit: 50
+          }
         );
 
       res.json({
-        source:
-          "BSD",
-
-        dateFrom:
-          today,
-
-        dateTo:
-          tomorrow,
-
-        count:
-          arr(data).length,
-
-        results:
-          arr(data)
+        source: SOURCE,
+        dateFrom: todayUTC(),
+        dateTo: tomorrowUTC(),
+        count: arr(data).length,
+        results: arr(data)
       });
 
     } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        error:
-          "Błąd BSD",
-
-        message:
-          error.message,
-
-        details:
-          error.data || null
+      res.status(500).json({
+        source: SOURCE,
+        error: error.message
       });
     }
   }
 );
+
+/* =========================================================
+   LIVE
+========================================================= */
 
 app.get(
   "/api/live",
@@ -1433,42 +1739,86 @@ app.get(
     try {
       const data =
         await bsd(
-          "/events/live/"
+          `/events/live/`
         );
 
       res.json({
-        source:
-          "BSD",
-
-        count:
-          arr(data).length,
-
-        results:
-          arr(data)
+        source: SOURCE,
+        exchange:
+          "NOT_CONNECTED",
+        count: arr(data).length,
+        results: arr(data)
       });
 
     } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        error:
-          "Błąd BSD LIVE",
-
-        message:
-          error.message,
-
-        details:
-          error.data || null
+      res.status(500).json({
+        source: SOURCE,
+        error: error.message
       });
     }
   }
 );
 
+/* =========================================================
+   HEALTH
+========================================================= */
+
+app.get(
+  "/api/health",
+  (req, res) => {
+    res.json({
+      status: "ok",
+      source: SOURCE,
+      version: VERSION,
+      exchange:
+        "NOT_CONNECTED",
+      bsdConfigured:
+        Boolean(BSD_API_KEY),
+      time:
+        new Date().toISOString()
+    });
+  }
+);
+
+/* =========================================================
+   ROOT
+========================================================= */
+
+app.get(
+  "/",
+  (req, res) => {
+    res.json({
+      name:
+        "Bet Analyzer Live API",
+      status:
+        "online",
+      version:
+        VERSION,
+      source:
+        SOURCE,
+      exchange:
+        "NOT_CONNECTED"
+    });
+  }
+);
+
+/* =========================================================
+   SERVER
+========================================================= */
+
 app.listen(
   PORT,
   () => {
     console.log(
-      `Bet Analyzer API running on port ${PORT}`
+      `Bet Analyzer Live ${VERSION}`
+    );
+
+    console.log(
+      `Port: ${PORT}`
+    );
+
+    console.log(
+      `Source: ${SOURCE}`
     );
   }
 );
