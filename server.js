@@ -61,11 +61,6 @@ function clamp(value, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
 }
 
-function pct(value) {
-  if (value === null || value === undefined) return null;
-  return Number(value);
-}
-
 function impliedProbability(odds) {
   if (!odds || odds <= 1) return null;
   return 1 / odds;
@@ -74,11 +69,13 @@ function impliedProbability(odds) {
 function edgePercent(probability, odds) {
   const implied = impliedProbability(odds);
 
-  if (probability === null || implied === null) {
+  if (probability == null || implied == null) {
     return null;
   }
 
-  return Number(((probability - implied) * 100).toFixed(2));
+  return Number(
+    ((probability - implied) * 100).toFixed(2)
+  );
 }
 
 function teamName(team) {
@@ -198,57 +195,53 @@ function extractPrediction(details) {
 
   return {
     home:
-      pct(markets.match_result?.prob_home),
+      markets.match_result?.prob_home ?? null,
 
     draw:
-      pct(markets.match_result?.prob_draw),
+      markets.match_result?.prob_draw ?? null,
 
     away:
-      pct(markets.match_result?.prob_away),
+      markets.match_result?.prob_away ?? null,
 
     predicted:
-      markets.match_result?.predicted ||
-      null,
+      markets.match_result?.predicted || null,
 
     expectedGoalsHome:
-      markets.expected_goals?.home ??
-      null,
+      markets.expected_goals?.home ?? null,
 
     expectedGoalsAway:
-      markets.expected_goals?.away ??
-      null,
+      markets.expected_goals?.away ?? null,
 
     over15:
-      pct(markets.over_under?.prob_over_15),
+      markets.over_under?.prob_over_15 ?? null,
 
     over25:
-      pct(markets.over_under?.prob_over_25),
+      markets.over_under?.prob_over_25 ?? null,
 
     over35:
-      pct(markets.over_under?.prob_over_35),
+      markets.over_under?.prob_over_35 ?? null,
 
     bttsYes:
-      pct(markets.btts?.prob_yes),
+      markets.btts?.prob_yes ?? null,
 
     mostLikelyScore:
-      markets.score?.most_likely ||
-      null,
+      markets.score?.most_likely || null,
 
     drawNoBetHome:
-      pct(markets.draw_no_bet?.prob_home),
+      markets.draw_no_bet?.prob_home ?? null,
 
     modelConfidence:
       p.model?.confidence != null
-        ? Number((p.model.confidence * 100).toFixed(1))
+        ? Number(
+            (p.model.confidence * 100).toFixed(1)
+          )
         : null,
 
     recommendations:
-      p.recommendations ||
-      null,
+      p.recommendations || null,
 
     createdAt:
-      p.created_at ||
-      null
+      p.created_at || null
   };
 }
 
@@ -258,34 +251,27 @@ function extractLineups(details) {
   if (!data) return null;
 
   const home =
-    data.lineups?.home ||
-    {};
+    data.lineups?.home || {};
 
   const away =
-    data.lineups?.away ||
-    {};
+    data.lineups?.away || {};
 
   return {
     status:
-      data.lineup_status ||
-      null,
+      data.lineup_status || null,
 
     updatedAt:
-      data.updated_at ||
-      null,
+      data.updated_at || null,
 
     home: {
       formation:
-        home.formation ||
-        null,
+        home.formation || null,
 
       confidence:
-        home.confidence ??
-        null,
+        Number(home.confidence || 0),
 
       players:
-        home.players ||
-        [],
+        home.players || [],
 
       unavailable:
         data.unavailable_players?.home ||
@@ -294,16 +280,13 @@ function extractLineups(details) {
 
     away: {
       formation:
-        away.formation ||
-        null,
+        away.formation || null,
 
       confidence:
-        away.confidence ??
-        null,
+        Number(away.confidence || 0),
 
       players:
-        away.players ||
-        [],
+        away.players || [],
 
       unavailable:
         data.unavailable_players?.away ||
@@ -354,25 +337,20 @@ function extractOdds(details) {
       odds.btts_no ?? null,
 
     updatedAt:
-      data.last_update_at ||
-      null,
+      data.last_update_at || null,
 
     nextUpdateAt:
-      data.next_update_at ||
-      null
+      data.next_update_at || null
   };
 }
 
-function unavailablePenalty(lineups) {
+function unavailableCount(lineups) {
   if (!lineups) return 0;
 
-  const home =
-    lineups.home?.unavailable?.length || 0;
-
-  const away =
-    lineups.away?.unavailable?.length || 0;
-
-  return Math.min(12, (home + away) * 1.5);
+  return (
+    (lineups.home?.unavailable?.length || 0) +
+    (lineups.away?.unavailable?.length || 0)
+  );
 }
 
 function lineupConfidence(lineups) {
@@ -386,65 +364,169 @@ function lineupConfidence(lineups) {
 
   if (!home && !away) return 0;
 
-  return clamp(
+  return (
     ((home + away) / 2) * 100
   );
 }
 
-function calculateCandidate(
+function h2hStrength(h2h, market) {
+  if (!h2h) return 0;
+
+  const matches =
+    Number(h2h.total_matches || 0);
+
+  if (matches < 3) return 0;
+
+  if (market === "HOME") {
+    return Number(
+      h2h.home_win_rate || 0
+    ) * 100;
+  }
+
+  if (market === "AWAY") {
+    return Number(
+      h2h.away_win_rate || 0
+    ) * 100;
+  }
+
+  if (
+    market === "OVER15" ||
+    market === "OVER25"
+  ) {
+    const avg =
+      Number(
+        h2h.avg_total_goals || 0
+      );
+
+    if (market === "OVER25") {
+      if (avg >= 3.2) return 100;
+      if (avg >= 2.8) return 75;
+      if (avg >= 2.5) return 50;
+      return 25;
+    }
+
+    if (avg >= 2.5) return 100;
+    if (avg >= 2.1) return 75;
+    if (avg >= 1.8) return 50;
+
+    return 25;
+  }
+
+  return 0;
+}
+
+function candidateProbability(
+  prediction,
+  market
+) {
+  if (!prediction) return null;
+
+  switch (market) {
+    case "HOME":
+      return prediction.home;
+
+    case "DRAW":
+      return prediction.draw;
+
+    case "AWAY":
+      return prediction.away;
+
+    case "OVER15":
+      return prediction.over15;
+
+    case "OVER25":
+      return prediction.over25;
+
+    case "BTTS":
+      return prediction.bttsYes;
+
+    default:
+      return null;
+  }
+}
+
+function candidateOdds(
+  odds,
+  market
+) {
+  if (!odds) return null;
+
+  switch (market) {
+    case "HOME":
+      return odds.homeWin;
+
+    case "DRAW":
+      return odds.draw;
+
+    case "AWAY":
+      return odds.awayWin;
+
+    case "OVER15":
+      return odds.over15;
+
+    case "OVER25":
+      return odds.over25;
+
+    case "BTTS":
+      return odds.bttsYes;
+
+    default:
+      return null;
+  }
+}
+
+function marketLabel(market) {
+  switch (market) {
+    case "HOME":
+      return "1";
+
+    case "DRAW":
+      return "X";
+
+    case "AWAY":
+      return "2";
+
+    case "OVER15":
+      return "Over 1.5";
+
+    case "OVER25":
+      return "Over 2.5";
+
+    case "BTTS":
+      return "BTTS – TAK";
+
+    default:
+      return market;
+  }
+}
+
+function buildCandidate(
   prediction,
   odds,
   market
 ) {
-  if (!prediction || !odds) {
+  const probability =
+    candidateProbability(
+      prediction,
+      market
+    );
+
+  const price =
+    candidateOdds(
+      odds,
+      market
+    );
+
+  if (
+    probability == null ||
+    !price ||
+    price <= 1
+  ) {
     return null;
   }
 
-  let probability = null;
-  let price = null;
-  let label = "";
-
-  if (market === "HOME") {
-    probability = prediction.home;
-    price = odds.homeWin;
-    label = "1";
-  }
-
-  if (market === "DRAW") {
-    probability = prediction.draw;
-    price = odds.draw;
-    label = "X";
-  }
-
-  if (market === "AWAY") {
-    probability = prediction.away;
-    price = odds.awayWin;
-    label = "2";
-  }
-
-  if (market === "OVER25") {
-    probability = prediction.over25;
-    price = odds.over25;
-    label = "Over 2.5";
-  }
-
-  if (market === "OVER15") {
-    probability = prediction.over15;
-    price = odds.over15;
-    label = "Over 1.5";
-  }
-
-  if (market === "BTTS_YES") {
-    probability = prediction.bttsYes;
-    price = odds.bttsYes;
-    label = "BTTS – TAK";
-  }
-
-  if (probability == null || !price) {
-    return null;
-  }
-
-  const implied = impliedProbability(price);
+  const implied =
+    impliedProbability(price);
 
   const edge =
     edgePercent(
@@ -453,13 +535,71 @@ function calculateCandidate(
     );
 
   return {
-    market: label,
-    probability,
-    odds: price,
+    market,
+    selection:
+      marketLabel(market),
+
+    probability:
+      Number(
+        probability.toFixed(1)
+      ),
+
+    odds:
+      Number(
+        price.toFixed(2)
+      ),
+
     impliedProbability:
-      Number((implied * 100).toFixed(1)),
-    edge
+      Number(
+        (implied * 100).toFixed(1)
+      ),
+
+    edge,
+
+    modelAgreement:
+      false,
+
+    exchangeConfirmation:
+      "NOT_CONNECTED"
   };
+}
+
+function recommendationAgreement(
+  prediction,
+  market
+) {
+  const r =
+    prediction?.recommendations;
+
+  if (!r) return false;
+
+  if (market === "HOME") {
+    return (
+      r.favorite === "H" &&
+      r.bet_favorite === true
+    );
+  }
+
+  if (market === "AWAY") {
+    return (
+      r.favorite === "A" &&
+      r.bet_favorite === true
+    );
+  }
+
+  if (market === "OVER15") {
+    return r.over_15 === true;
+  }
+
+  if (market === "OVER25") {
+    return r.over_25 === true;
+  }
+
+  if (market === "BTTS") {
+    return r.btts === true;
+  }
+
+  return false;
 }
 
 function calculateScore({
@@ -473,45 +613,148 @@ function calculateScore({
 
   let score = 50;
 
-  const edge = candidate.edge || 0;
+  const p =
+    candidate.probability;
 
-  if (edge >= 15) score += 20;
-  else if (edge >= 10) score += 14;
-  else if (edge >= 6) score += 8;
-  else if (edge >= 3) score += 3;
-  else if (edge < 0) score -= 15;
+  const edge =
+    candidate.edge || 0;
+
+  /*
+   * 1. REALISTIC PROBABILITY
+   */
+
+  if (p >= 75) score += 12;
+  else if (p >= 65) score += 8;
+  else if (p >= 60) score += 5;
+  else if (p < 50) score -= 12;
+
+  /*
+   * 2. EDGE
+   *
+   * Ograniczamy wpływ edge,
+   * żeby model nie produkował
+   * absurdalnych typów.
+   */
+
+  if (edge >= 15) score += 5;
+  else if (edge >= 10) score += 4;
+  else if (edge >= 6) score += 3;
+  else if (edge >= 3) score += 1;
+  else if (edge < 0) score -= 12;
+
+  /*
+   * 3. MODEL CONFIDENCE
+   */
+
+  const confidence =
+    prediction?.modelConfidence || 0;
+
+  if (confidence >= 70) score += 8;
+  else if (confidence >= 60) score += 5;
+  else if (confidence >= 55) score += 2;
+  else if (confidence < 45) score -= 8;
+
+  /*
+   * 4. AGREEMENT Z REKOMENDACJĄ BSD
+   */
 
   if (
-    prediction?.modelConfidence != null
+    candidate.modelAgreement
   ) {
-    if (prediction.modelConfidence >= 70) {
-      score += 8;
-    } else if (
-      prediction.modelConfidence >= 55
-    ) {
-      score += 4;
-    }
+    score += 7;
   }
 
-  if (lineups) {
-    score +=
-      lineupConfidence(lineups) * 0.08;
+  /*
+   * 5. SKŁADY
+   */
 
-    score -=
-      unavailablePenalty(lineups);
+  const lineupConf =
+    lineupConfidence(lineups);
+
+  if (lineupConf >= 70) score += 5;
+  else if (lineupConf >= 60) score += 3;
+  else if (lineupConf >= 50) score += 1;
+  else if (
+    lineups &&
+    lineupConf < 45
+  ) {
+    score -= 5;
   }
 
-  if (h2h) {
-    const matches =
-      h2h.total_matches || 0;
+  /*
+   * 6. ABSENCJE
+   */
 
-    if (matches >= 5) {
-      score += 3;
-    }
+  const missing =
+    unavailableCount(lineups);
+
+  if (missing === 0) {
+    score += 3;
+  } else if (missing <= 2) {
+    score += 1;
+  } else if (missing >= 4) {
+    score -= 6;
   }
 
-  if (event?.weather?.code === 3) {
-    score -= 1;
+  /*
+   * 7. H2H
+   */
+
+  const h2hValue =
+    h2hStrength(
+      h2h,
+      candidate.market
+    );
+
+  if (h2hValue >= 75) {
+    score += 4;
+  } else if (
+    h2hValue >= 60
+  ) {
+    score += 2;
+  }
+
+  /*
+   * 8. xG
+   */
+
+  const xgHome =
+    Number(
+      prediction?.expectedGoalsHome || 0
+    );
+
+  const xgAway =
+    Number(
+      prediction?.expectedGoalsAway || 0
+    );
+
+  const totalXg =
+    xgHome + xgAway;
+
+  if (
+    candidate.market === "OVER25"
+  ) {
+    if (totalXg >= 3.0) score += 5;
+    else if (totalXg >= 2.7) score += 3;
+    else if (totalXg < 2.3) score -= 5;
+  }
+
+  if (
+    candidate.market === "OVER15"
+  ) {
+    if (totalXg >= 2.4) score += 4;
+    else if (totalXg >= 2.1) score += 2;
+  }
+
+  /*
+   * 9. WEATHER
+   */
+
+  if (
+    event?.weather?.wind_speed != null &&
+    Number(event.weather.wind_speed) >= 30
+  ) {
+    score -= 3;
   }
 
   return Number(
@@ -519,28 +762,180 @@ function calculateScore({
   );
 }
 
-function classify(score, candidate) {
-  if (!candidate) return "SKIP";
+function classify(
+  score,
+  candidate,
+  prediction
+) {
+  if (!candidate) {
+    return "REJECT";
+  }
+
+  const p =
+    candidate.probability;
+
+  const edge =
+    candidate.edge || 0;
+
+  const confidence =
+    prediction?.modelConfidence || 0;
+
+  /*
+   * TOP:
+   * kilka warunków musi być
+   * spełnionych jednocześnie.
+   */
 
   if (
-    score >= 75 &&
-    candidate.edge >= 6 &&
-    candidate.probability >= 60
+    score >= 78 &&
+    p >= 65 &&
+    edge >= 4 &&
+    confidence >= 55 &&
+    candidate.modelAgreement
   ) {
     return "TOP";
   }
 
+  /*
+   * WATCH:
+   * interesujący, ale jeszcze
+   * nie spełnia wszystkich
+   * warunków.
+   */
+
   if (
-    score >= 62 &&
-    candidate.edge >= 2
+    score >= 65 &&
+    p >= 58 &&
+    edge >= 2 &&
+    confidence >= 50
   ) {
     return "WATCH";
   }
 
-  return "SKIP";
+  return "REJECT";
 }
 
-function analyzeEvent(event, details) {
+function reasons(
+  candidate,
+  prediction,
+  lineups,
+  h2h
+) {
+  const result = [];
+
+  if (
+    candidate.probability >= 70
+  ) {
+    result.push(
+      "wysokie prawdopodobieństwo modelu"
+    );
+  } else if (
+    candidate.probability >= 60
+  ) {
+    result.push(
+      "dobre prawdopodobieństwo modelu"
+    );
+  }
+
+  if (
+    candidate.edge >= 8
+  ) {
+    result.push(
+      "dodatni edge względem kursu"
+    );
+  }
+
+  if (
+    candidate.modelAgreement
+  ) {
+    result.push(
+      "zgodność z rekomendacją BSD"
+    );
+  }
+
+  if (
+    prediction?.expectedGoalsHome != null &&
+    prediction?.expectedGoalsAway != null
+  ) {
+    result.push(
+      `xG ${prediction.expectedGoalsHome} – ${prediction.expectedGoalsAway}`
+    );
+  }
+
+  if (
+    lineups &&
+    lineupConfidence(lineups) >= 60
+  ) {
+    result.push(
+      "przewidywane składy mają dobrą pewność"
+    );
+  }
+
+  if (
+    h2h &&
+    h2h.total_matches >= 5
+  ) {
+    result.push(
+      "dostępna większa próbka H2H"
+    );
+  }
+
+  return result;
+}
+
+function warnings(
+  candidate,
+  prediction,
+  lineups
+) {
+  const result = [];
+
+  if (
+    candidate.edge >= 15
+  ) {
+    result.push(
+      "bardzo duży edge modelowy — wymaga potwierdzenia rynkiem"
+    );
+  }
+
+  if (
+    prediction?.modelConfidence != null &&
+    prediction.modelConfidence < 55
+  ) {
+    result.push(
+      "niska pewność modelu"
+    );
+  }
+
+  if (
+    lineups &&
+    lineupConfidence(lineups) < 50
+  ) {
+    result.push(
+      "niska pewność przewidywanych składów"
+    );
+  }
+
+  if (
+    !lineups ||
+    lineups.status !== "confirmed"
+  ) {
+    result.push(
+      "składy nie są jeszcze potwierdzone"
+    );
+  }
+
+  result.push(
+    "Betfair Exchange nie jest jeszcze podłączony"
+  );
+
+  return result;
+}
+
+function analyzeEvent(
+  event,
+  details
+) {
   const prediction =
     extractPrediction(details);
 
@@ -555,28 +950,51 @@ function analyzeEvent(event, details) {
     event.h2h ||
     null;
 
+  if (!prediction || !odds) {
+    return {
+      eventId: event.id,
+      event: event.event,
+      league: event.league,
+      start: event.start,
+      status: event.status,
+      classification: "REJECT",
+      score: 0,
+      reason:
+        "Brak kompletu predykcji lub kursów",
+      candidates: []
+    };
+  }
+
   const markets = [
     "HOME",
     "DRAW",
     "AWAY",
     "OVER15",
     "OVER25",
-    "BTTS_YES"
+    "BTTS"
   ];
 
   const candidates = [];
 
   for (const market of markets) {
     const candidate =
-      calculateCandidate(
+      buildCandidate(
         prediction,
         odds,
         market
       );
 
-    if (!candidate) continue;
+    if (!candidate) {
+      continue;
+    }
 
-    const score =
+    candidate.modelAgreement =
+      recommendationAgreement(
+        prediction,
+        market
+      );
+
+    candidate.score =
       calculateScore({
         candidate,
         prediction,
@@ -585,12 +1003,29 @@ function analyzeEvent(event, details) {
         event
       });
 
-    candidates.push({
-      ...candidate,
-      score,
-      classification:
-        classify(score, candidate)
-    });
+    candidate.classification =
+      classify(
+        candidate.score,
+        candidate,
+        prediction
+      );
+
+    candidate.reasons =
+      reasons(
+        candidate,
+        prediction,
+        lineups,
+        h2h
+      );
+
+    candidate.warnings =
+      warnings(
+        candidate,
+        prediction,
+        lineups
+      );
+
+    candidates.push(candidate);
   }
 
   candidates.sort(
@@ -598,9 +1033,19 @@ function analyzeEvent(event, details) {
       b.score - a.score
   );
 
-  const best =
-    candidates[0] ||
-    null;
+  const top =
+    candidates.filter(
+      x =>
+        x.classification ===
+        "TOP"
+    );
+
+  const watch =
+    candidates.filter(
+      x =>
+        x.classification ===
+        "WATCH"
+    );
 
   return {
     eventId: event.id,
@@ -613,9 +1058,11 @@ function analyzeEvent(event, details) {
 
     status: event.status,
 
-    refereeId: event.refereeId,
+    refereeId:
+      event.refereeId,
 
-    weather: event.weather,
+    weather:
+      event.weather,
 
     prediction,
 
@@ -625,159 +1072,261 @@ function analyzeEvent(event, details) {
 
     h2h,
 
+    bestPick:
+      candidates[0] || null,
+
+    top,
+
+    watch,
+
     candidates,
 
-    bestPick: best,
-
     score:
-      best?.score ??
-      0,
+      candidates[0]?.score || 0,
 
     classification:
-      best?.classification ||
-      "SKIP"
+      top.length > 0
+        ? "TOP"
+        : watch.length > 0
+          ? "WATCH"
+          : "REJECT"
   };
 }
 
 app.get("/", (req, res) => {
   res.json({
-    name: "Bet Analyzer Live API",
-    status: "online",
-    version: "4.0.0",
-    source: "BSD"
+    name:
+      "Bet Analyzer Live API",
+
+    status:
+      "online",
+
+    version:
+      "4.1.0",
+
+    source:
+      "BSD",
+
+    exchange:
+      "NOT_CONNECTED"
   });
 });
 
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "ok",
-
-    configured: {
-      bsd:
-        Boolean(
-          process.env.BSD_API_KEY
-        ),
-
-      sportmonks:
-        Boolean(
-          process.env.SPORTMONKS_API_KEY
-        ),
-
-      apiFootball:
-        Boolean(
-          process.env.API_FOOTBALL_KEY
-        ),
-
-      betfair:
-        Boolean(
-          process.env.BETFAIR_API_KEY
-        )
-    }
-  });
-});
-
-app.get("/api/scan", async (req, res) => {
-  try {
-    const today = getDate(0);
-    const tomorrow = getDate(1);
-
-    const data =
-      await bsd(
-        `/events/?date_from=${today}&date_to=${tomorrow}&status=upcoming&limit=100`
-      );
-
-    const events =
-      arr(data)
-        .filter(
-          e =>
-            e.status ===
-            "notstarted"
-        )
-        .map(mapEvent);
-
-    const analyses = [];
-
-    for (const event of events) {
-      try {
-        const details =
-          await getEventDetails(
-            event.id
-          );
-
-        const analysis =
-          analyzeEvent(
-            event,
-            details
-          );
-
-        analyses.push(
-          analysis
-        );
-
-      } catch (error) {
-        console.log(
-          `Analiza ${event.id}:`,
-          error.message
-        );
-      }
-    }
-
-    analyses.sort(
-      (a, b) =>
-        b.score - a.score
-    );
-
+app.get(
+  "/api/health",
+  (req, res) => {
     res.json({
-      source: "BSD",
+      status: "ok",
 
-      period: {
-        start: today,
-        end: tomorrow
-      },
+      configured: {
+        bsd:
+          Boolean(
+            process.env.BSD_API_KEY
+          ),
 
-      totalEvents:
-        events.length,
+        sportmonks:
+          Boolean(
+            process.env.SPORTMONKS_API_KEY
+          ),
 
-      analyzed:
-        analyses.length,
+        apiFootball:
+          Boolean(
+            process.env.API_FOOTBALL_KEY
+          ),
 
-      top:
-        analyses
-          .filter(
-            x =>
-              x.classification ===
-              "TOP"
+        betfair:
+          Boolean(
+            process.env.BETFAIR_API_KEY
           )
-          .slice(0, 10),
-
-      watch:
-        analyses
-          .filter(
-            x =>
-              x.classification ===
-              "WATCH"
-          )
-          .slice(0, 20),
-
-      all:
-        analyses
-    });
-
-  } catch (error) {
-    res.status(
-      error.status || 500
-    ).json({
-      error:
-        "Błąd analizatora BSD",
-
-      message:
-        error.message,
-
-      details:
-        error.data || null
+      }
     });
   }
-});
+);
+
+app.get(
+  "/api/scan",
+  async (req, res) => {
+    try {
+      const today =
+        getDate(0);
+
+      const tomorrow =
+        getDate(1);
+
+      const data =
+        await bsd(
+          `/events/?date_from=${today}&date_to=${tomorrow}&status=upcoming&limit=100`
+        );
+
+      const events =
+        arr(data)
+          .filter(
+            e =>
+              e.status ===
+              "notstarted"
+          )
+          .map(mapEvent);
+
+      const analyses = [];
+
+      /*
+       * Limitujemy liczbę meczów,
+       * żeby nie zabić darmowego API.
+       */
+
+      const selected =
+        events.slice(0, 30);
+
+      for (
+        const event of selected
+      ) {
+        try {
+          const details =
+            await getEventDetails(
+              event.id
+            );
+
+          const analysis =
+            analyzeEvent(
+              event,
+              details
+            );
+
+          analyses.push(
+            analysis
+          );
+        } catch (error) {
+          console.log(
+            `Analiza ${event.id}:`,
+            error.message
+          );
+        }
+      }
+
+      analyses.sort(
+        (a, b) =>
+          b.score - a.score
+      );
+
+      const top = [];
+
+      const watch = [];
+
+      for (
+        const analysis
+        of analyses
+      ) {
+        for (
+          const candidate
+          of analysis.candidates || []
+        ) {
+          if (
+            candidate.classification ===
+            "TOP"
+          ) {
+            top.push({
+              eventId:
+                analysis.eventId,
+
+              event:
+                analysis.event,
+
+              league:
+                analysis.league,
+
+              start:
+                analysis.start,
+
+              ...candidate
+            });
+          }
+
+          if (
+            candidate.classification ===
+            "WATCH"
+          ) {
+            watch.push({
+              eventId:
+                analysis.eventId,
+
+              event:
+                analysis.event,
+
+              league:
+                analysis.league,
+
+              start:
+                analysis.start,
+
+              ...candidate
+            });
+          }
+        }
+      }
+
+      top.sort(
+        (a, b) =>
+          b.score - a.score
+      );
+
+      watch.sort(
+        (a, b) =>
+          b.score - a.score
+      );
+
+      res.json({
+        source: "BSD",
+
+        version:
+          "4.1.0",
+
+        exchange:
+          "NOT_CONNECTED",
+
+        period: {
+          start: today,
+          end: tomorrow
+        },
+
+        totalEvents:
+          events.length,
+
+        analyzed:
+          analyses.length,
+
+        top:
+          top.slice(0, 10),
+
+        watch:
+          watch.slice(0, 20),
+
+        rejected:
+          analyses.filter(
+            x =>
+              x.classification ===
+              "REJECT"
+          ).length,
+
+        all:
+          analyses
+      });
+
+    } catch (error) {
+      res.status(
+        error.status || 500
+      ).json({
+        error:
+          "Błąd analizatora BSD",
+
+        message:
+          error.message,
+
+        details:
+          error.data || null
+      });
+    }
+  }
+);
 
 app.get(
   "/api/match/:id",
@@ -803,7 +1352,12 @@ app.get(
         );
 
       res.json({
-        source: "BSD",
+        source:
+          "BSD",
+
+        version:
+          "4.1.0",
+
         analysis
       });
 
@@ -828,8 +1382,11 @@ app.get(
   "/api/bsd-test",
   async (req, res) => {
     try {
-      const today = getDate(0);
-      const tomorrow = getDate(1);
+      const today =
+        getDate(0);
+
+      const tomorrow =
+        getDate(1);
 
       const data =
         await bsd(
@@ -837,10 +1394,14 @@ app.get(
         );
 
       res.json({
-        source: "BSD",
+        source:
+          "BSD",
 
-        dateFrom: today,
-        dateTo: tomorrow,
+        dateFrom:
+          today,
+
+        dateTo:
+          tomorrow,
 
         count:
           arr(data).length,
@@ -853,7 +1414,8 @@ app.get(
       res.status(
         error.status || 500
       ).json({
-        error: "Błąd BSD",
+        error:
+          "Błąd BSD",
 
         message:
           error.message,
@@ -875,7 +1437,8 @@ app.get(
         );
 
       res.json({
-        source: "BSD",
+        source:
+          "BSD",
 
         count:
           arr(data).length,
