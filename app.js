@@ -1,19 +1,465 @@
-const DEMO=[
-{event:'Arsenal – Brighton',market:'1X2: Arsenal',odds:1.72,probability:68.4,edge:5.8,liquidity:12840,back:2.31,lay:2.34,ltp:2.33,ltpDelta:0.012,volumeDelta:1840,pressure:'BUYING'},
-{event:'Inter – Torino',market:'O 2.5',odds:1.78,probability:66.9,edge:4.7,liquidity:9120,back:1.81,lay:1.83,ltp:1.82,ltpDelta:-0.018,volumeDelta:1210,pressure:'BUYING'},
-{event:'Lech – Jagiellonia',market:'BTTS: TAK',odds:1.74,probability:65.7,edge:4.1,liquidity:6040,back:1.76,lay:1.79,ltp:1.78,ltpDelta:-0.011,volumeDelta:980,pressure:'BUYING'},
-{event:'Barcelona – Sevilla',market:'O 1.5',odds:1.43,probability:77.2,edge:3.9,liquidity:15100,back:1.44,lay:1.46,ltp:1.45,ltpDelta:-0.006,volumeDelta:2200,pressure:'BUYING'},
-{event:'Milan – Lazio',market:'DNB: Milan',odds:1.69,probability:64.8,edge:3.6,liquidity:7310,back:1.70,lay:1.72,ltp:1.71,ltpDelta:0.003,volumeDelta:510,pressure:'NEUTRAL'},
-{event:'Dortmund – Mainz',market:'O 2.5',odds:1.66,probability:65.2,edge:3.4,liquidity:8320,back:1.67,lay:1.69,ltp:1.68,ltpDelta:-0.009,volumeDelta:760,pressure:'BUYING'},
-{event:'PSV – Utrecht',market:'1X2: PSV',odds:1.55,probability:72.1,edge:3.2,liquidity:10200,back:1.56,lay:1.58,ltp:1.57,ltpDelta:-0.005,volumeDelta:1130,pressure:'BUYING'},
-{event:'Porto – Braga',market:'1X2: Porto',odds:1.62,probability:67.3,edge:3.0,liquidity:6830,back:1.63,lay:1.65,ltp:1.64,ltpDelta:0.004,volumeDelta:450,pressure:'NEUTRAL'},
-{event:'Roma – Genoa',market:'U 3.5',odds:1.51,probability:71.0,edge:2.9,liquidity:5200,back:1.52,lay:1.54,ltp:1.53,ltpDelta:-0.002,volumeDelta:340,pressure:'NEUTRAL'},
-{event:'Ajax – Twente',market:'BTTS: TAK',odds:1.77,probability:63.8,edge:2.7,liquidity:4900,back:1.78,lay:1.81,ltp:1.80,ltpDelta:0.016,volumeDelta:280,pressure:'SELLING'}
+const DEMO = [
+
+  {event:'Arsenal – Brighton',market:'1X2: Arsenal',odds:1.72,probability:68.4,edge:5.8,liquidity:12840,back:2.31,lay:2.34,ltp:2.33,ltpDelta:0.012,volumeDelta:1840,pressure:'BUYING'},
+
+  {event:'Inter – Torino',market:'O 2.5',odds:1.78,probability:66.9,edge:4.7,liquidity:9120,back:1.81,lay:1.83,ltp:1.82,ltpDelta:-0.018,volumeDelta:1210,pressure:'BUYING'},
+
+  {event:'Lech – Jagiellonia',market:'BTTS: TAK',odds:1.74,probability:65.7,edge:4.1,liquidity:6040,back:1.76,lay:1.79,ltp:1.78,ltpDelta:-0.011,volumeDelta:980,pressure:'BUYING'},
+
+  {event:'Barcelona – Sevilla',market:'O 1.5',odds:1.43,probability:77.2,edge:3.9,liquidity:15100,back:1.44,lay:1.46,ltp:1.45,ltpDelta:-0.006,volumeDelta:2200,pressure:'BUYING'},
+
+  {event:'Milan – Lazio',market:'DNB: Milan',odds:1.69,probability:64.8,edge:3.6,liquidity:7310,back:1.70,lay:1.72,ltp:1.71,ltpDelta:0.003,volumeDelta:510,pressure:'NEUTRAL'},
+
+  {event:'Dortmund – Mainz',market:'O 2.5',odds:1.66,probability:65.2,edge:3.4,liquidity:8320,back:1.67,lay:1.69,ltp:1.68,ltpDelta:-0.009,volumeDelta:760,pressure:'BUYING'},
+
+  {event:'PSV – Utrecht',market:'1X2: PSV',odds:1.55,probability:72.1,edge:3.2,liquidity:10200,back:1.56,lay:1.58,ltp:1.57,ltpDelta:-0.005,volumeDelta:1130,pressure:'BUYING'},
+
+  {event:'Porto – Braga',market:'1X2: Porto',odds:1.62,probability:67.3,edge:3.0,liquidity:6830,back:1.63,lay:1.65,ltp:1.64,ltpDelta:0.004,volumeDelta:450,pressure:'NEUTRAL'},
+
+  {event:'Roma – Genoa',market:'U 3.5',odds:1.51,probability:71.0,edge:2.9,liquidity:5200,back:1.52,lay:1.54,ltp:1.53,ltpDelta:-0.002,volumeDelta:340,pressure:'NEUTRAL'},
+
+  {event:'Ajax – Twente',market:'BTTS: TAK',odds:1.77,probability:63.8,edge:2.7,liquidity:4900,back:1.78,lay:1.81,ltp:1.80,ltpDelta:0.016,volumeDelta:280,pressure:'SELLING'}
+
 ];
-const $=id=>document.getElementById(id);const fmt=(n,d=2)=>Number(n).toFixed(d);let history=JSON.parse(localStorage.getItem('ba_history')||'[]');
-function score(x){return x.probability*.45+x.edge*2+x.liquidity/3000+(x.pressure==='BUYING'?5:x.pressure==='SELLING'?-4:0)+(x.ltpDelta<0?2:-1)}
-function card(x,i,live=false){return `<article class="card"><div class="top"><div><div class="match">#${i+1} ${x.event||'Mecz'}</div><div class="muted">${x.market||''}</div></div><span class="badge">${live?'LIVE':'DEMO'}</span></div><div class="grid"><div class="metric"><span class="muted">Kurs</span><b>${x.odds??'-'}</b></div><div class="metric"><span class="muted">Model est.</span><b class="good">${x.probability!=null?fmt(x.probability,1)+'%':'-'}</b></div><div class="metric"><span class="muted">Edge</span><b>${x.edge!=null?fmt(x.edge,1)+'%':'-'}</b></div><div class="metric"><span class="muted">Liq.</span><b>${x.liquidity!=null?Number(x.liquidity).toLocaleString('pl-PL'):'-'}</b></div><div class="metric"><span class="muted">BACK</span><b>${x.back??'-'}</b></div><div class="metric"><span class="muted">LAY</span><b>${x.lay??'-'}</b></div><div class="metric"><span class="muted">LTP</span><b>${x.ltp??'-'}</b></div><div class="metric"><span class="muted">Ruch LTP</span><b class="${(x.ltpDelta||0)<0?'good':(x.ltpDelta||0)>0?'danger':''}">${x.ltpDelta==null?'-':((x.ltpDelta>0?'+':'' )+fmt(x.ltpDelta,3))}</b></div></div><p class="small">Presja rynku: <b>${x.pressure||'UNKNOWN'}</b> · traded Δ ${x.volumeDelta!=null?Number(x.volumeDelta).toLocaleString('pl-PL'):'-'} · Model nie jest gwarancją wyniku.</p></article>`}
-function render(rows,live=false){$('cards').innerHTML=rows.length?rows.map((x,i)=>card(x,i,live)).join(''):'<p class="note">Brak kandydatów spełniających filtry. Aplikacja nie dobija listy słabymi typami.</p>';$('exchangeBox').innerHTML=rows.slice(0,10).map(x=>`<div class="card"><b>${x.event||'Mecz'}</b><div class="small">${x.market||''} · BACK ${x.back??'-'} · LAY ${x.lay??'-'} · LTP ${x.ltp??'-'} · spread ${x.back&&x.lay?fmt(x.lay-x.back):'-'} · LTP Δ ${x.ltpDelta??'-'} · volume Δ ${x.volumeDelta??'-'} · ${x.pressure||'UNKNOWN'}</div></div>`).join('')||'<p class="note">Brak danych giełdowych.</p>';history.unshift({at:new Date().toLocaleString('pl-PL'),count:rows.length,mode:live?'LIVE':'DEMO'});history=history.slice(0,30);localStorage.setItem('ba_history',JSON.stringify(history));$('historyBox').innerHTML=history.map(x=>`<div class="card"><b>${x.at}</b><div class="small">${x.mode} · zakwalifikowano: ${x.count}</div></div>`).join('')}
-function demoScan(){const p=+$('minProb').value,e=+$('minEdge').value,l=+$('minLiq').value,n=+$('limit').value;const rows=DEMO.filter(x=>x.probability>=p&&x.edge>=e&&x.liquidity>=l).sort((a,b)=>score(b)-score(a)).slice(0,n);$('statusText').textContent='DEMO — dane przykładowe';$('statusDot').classList.remove('live');render(rows,false)}
-async function liveScan(){const base=$('backend').value.trim().replace(/\/$/,'');if(!base){alert('Najpierw wpisz Backend URL w Ustawieniach.');return}const params=new URLSearchParams({marketType:$('marketType').value,minProb:$('minProb').value,minEdge:$('minEdge').value,minLiq:$('minLiq').value,limit:$('limit').value});try{$('statusText').textContent='LIVE — pobieranie danych…';const r=await fetch(`${base}/api/scan?${params}`);const j=await r.json();if(!r.ok)throw new Error(j.error||`HTTP ${r.status}`);$('statusDot').classList.add('live');$('statusText').textContent=`LIVE — ${j.sources.join(' + ')||'brak źródeł'}`;render(j.results||[],true)}catch(err){$('statusDot').classList.remove('live');$('statusText').textContent='LIVE — błąd połączenia';$('cards').innerHTML=`<p class="error">${err.message}</p>`}}
-$('scan').onclick=()=>document.querySelector('#mode').textContent==='LIVE'?liveScan():demoScan();$('mode').onclick=()=>{const live=$('mode').textContent!=='LIVE';$('mode').textContent=live?'LIVE':'DEMO';$('mode').classList.toggle('live',live);live?liveScan():demoScan()};document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));$(b.dataset.tab).classList.remove('hidden')});$('save').onclick=()=>{localStorage.setItem('ba_backend',$('backend').value.trim());localStorage.setItem('ba_refresh',$('refresh').value);alert('Zapisano')};$('test').onclick=async()=>{const b=$('backend').value.trim().replace(/\/$/,'');if(!b)return alert('Wpisz Backend URL.');try{const r=await fetch(b+'/api/health');const j=await r.json();$('health').textContent=`Połączenie OK. Sportmonks: ${j.configured.sportmonks?'OK':'BRAK'} · Betfair: ${j.configured.betfair?'OK':'BRAK'}`}catch(e){$('health').textContent='Błąd połączenia: '+e.message}};$('backend').value=localStorage.getItem('ba_backend')||'';$('refresh').value=localStorage.getItem('ba_refresh')||15;demoScan();setInterval(()=>{if($('mode').textContent==='LIVE'&&document.visibilityState==='visible')liveScan()},Math.max(5,+$('refresh').value||15)*1000);if('serviceWorker'in navigator)navigator.serviceWorker.register('service-worker.js');
+
+const $ = id => document.getElementById(id);
+
+const fmt = (n,d=2) => Number(n).toFixed(d);
+
+let history = JSON.parse(localStorage.getItem('ba_history') || '[]');
+
+function score(x) {
+
+  return x.probability * 0.45 +
+
+    x.edge * 2 +
+
+    x.liquidity / 3000 +
+
+    (x.pressure === 'BUYING' ? 5 : x.pressure === 'SELLING' ? -4 : 0) +
+
+    (x.ltpDelta < 0 ? 2 : -1);
+
+}
+
+function card(x,i,live=false) {
+
+  return `
+
+    <article class="card">
+
+      <div class="top">
+
+        <div>
+
+          <div class="match">#${i+1} ${x.event || 'Mecz'}</div>
+
+          <div class="muted">${x.market || ''}</div>
+
+        </div>
+
+        <span class="badge">${live ? 'LIVE' : 'DEMO'}</span>
+
+      </div>
+
+      <div class="grid">
+
+        <div class="metric">
+
+          <span class="muted">Kurs</span>
+
+          <b>${x.odds ?? '-'}</b>
+
+        </div>
+
+        <div class="metric">
+
+          <span class="muted">Model est.</span>
+
+          <b class="good">${x.probability != null ? fmt(x.probability,1)+'%' : '-'}</b>
+
+        </div>
+
+        <div class="metric">
+
+          <span class="muted">Edge</span>
+
+          <b>${x.edge != null ? fmt(x.edge,1)+'%' : '-'}</b>
+
+        </div>
+
+        <div class="metric">
+
+          <span class="muted">Liq.</span>
+
+          <b>${x.liquidity != null ? Number(x.liquidity).toLocaleString('pl-PL') : '-'}</b>
+
+        </div>
+
+        <div class="metric">
+
+          <span class="muted">BACK</span>
+
+          <b>${x.back ?? '-'}</b>
+
+        </div>
+
+        <div class="metric">
+
+          <span class="muted">LAY</span>
+
+          <b>${x.lay ?? '-'}</b>
+
+        </div>
+
+        <div class="metric">
+
+          <span class="muted">LTP</span>
+
+          <b>${x.ltp ?? '-'}</b>
+
+        </div>
+
+        <div class="metric">
+
+          <span class="muted">Ruch LTP</span>
+
+          <b class="${(x.ltpDelta || 0) < 0 ? 'good' : (x.ltpDelta || 0) > 0 ? 'danger' : ''}">
+
+            ${x.ltpDelta == null ? '-' : ((x.ltpDelta > 0 ? '+' : '') + fmt(x.ltpDelta,3))}
+
+          </b>
+
+        </div>
+
+      </div>
+
+      <p class="small">
+
+        Presja rynku: <b>${x.pressure || 'UNKNOWN'}</b>
+
+        · traded Δ ${x.volumeDelta != null ? Number(x.volumeDelta).toLocaleString('pl-PL') : '-'}
+
+        · Model nie jest gwarancją wyniku.
+
+      </p>
+
+    </article>
+
+  `;
+
+}
+
+function render(rows,live=false) {
+
+  $('cards').innerHTML = rows.length
+
+    ? rows.map((x,i) => card(x,i,live)).join('')
+
+    : `<p class="note">
+
+        Brak kandydatów spełniających filtry.<br>
+
+        Aplikacja nie dobija listy słabymi typami.
+
+       </p>`;
+
+  $('exchangeBox').innerHTML =
+
+    rows.slice(0,10).map(x => `
+
+      <div class="card">
+
+        <b>${x.event || 'Mecz'}</b>
+
+        <div class="small">
+
+          ${x.market || ''}
+
+          · BACK ${x.back ?? '-'}
+
+          · LAY ${x.lay ?? '-'}
+
+          · LTP ${x.ltp ?? '-'}
+
+          · spread ${x.back && x.lay ? fmt(x.lay-x.back) : '-'}
+
+          · LTP Δ ${x.ltpDelta ?? '-'}
+
+          · volume Δ ${x.volumeDelta ?? '-'}
+
+          · ${x.pressure || 'UNKNOWN'}
+
+        </div>
+
+      </div>
+
+    `).join('')
+
+    || '<p class="note">Brak danych giełdowych.</p>';
+
+  history.unshift({
+
+    at: new Date().toLocaleString('pl-PL'),
+
+    count: rows.length,
+
+    mode: live ? 'LIVE' : 'DEMO'
+
+  });
+
+  history = history.slice(0,30);
+
+  localStorage.setItem('ba_history',JSON.stringify(history));
+
+  $('historyBox').innerHTML = history.map(x => `
+
+    <div class="card">
+
+      <b>${x.at}</b>
+
+      <div class="small">
+
+        ${x.mode} · zakwalifikowano: ${x.count}
+
+      </div>
+
+    </div>
+
+  `).join('');
+
+}
+
+function demoScan() {
+
+  const p = +$('minProb').value;
+
+  const e = +$('minEdge').value;
+
+  const l = +$('minLiq').value;
+
+  const n = +$('limit').value;
+
+  const rows = DEMO
+
+    .filter(x =>
+
+      x.probability >= p &&
+
+      x.edge >= e &&
+
+      x.liquidity >= l
+
+    )
+
+    .sort((a,b) => score(b) - score(a))
+
+    .slice(0,n);
+
+  $('statusText').textContent = 'DEMO — dane przykładowe';
+
+  $('statusDot').classList.remove('live');
+
+  render(rows,false);
+
+}
+
+async function liveScan() {
+
+  const base = $('backend').value.trim().replace(/\/$/,'');
+
+  if (!base) {
+
+    alert('Najpierw wpisz Backend URL w Ustawieniach.');
+
+    return;
+
+  }
+
+  const params = new URLSearchParams({
+
+    marketType: $('marketType').value,
+
+    minProb: $('minProb').value,
+
+    minEdge: $('minEdge').value,
+
+    minLiq: $('minLiq').value,
+
+    limit: $('limit').value
+
+  });
+
+  try {
+
+    $('statusText').textContent = 'LIVE — pobieranie danych…';
+
+    const r = await fetch(`${base}/api/scan?${params}`);
+
+    const j = await r.json();
+
+    if (!r.ok) {
+
+      throw new Error(j.error || `HTTP ${r.status}`);
+
+    }
+
+    $('statusDot').classList.add('live');
+
+    $('statusText').textContent =
+
+      `LIVE — ${j.sources.join(' + ') || 'brak źródeł'}`;
+
+    render(j.results || [],true);
+
+  } catch(err) {
+
+    $('statusDot').classList.remove('live');
+
+    $('statusText').textContent =
+
+      'LIVE — błąd połączenia';
+
+    $('cards').innerHTML =
+
+      `<p class="error">${err.message}</p>`;
+
+  }
+
+}
+
+$('scan').onclick = () =>
+
+  document.querySelector('#mode').textContent === 'LIVE'
+
+    ? liveScan()
+
+    : demoScan();
+
+$('mode').onclick = () => {
+
+  const live =
+
+    $('mode').textContent !== 'LIVE';
+
+  $('mode').textContent =
+
+    live ? 'LIVE' : 'DEMO';
+
+  $('mode').classList.toggle('live',live);
+
+  live ? liveScan() : demoScan();
+
+};
+
+document.querySelectorAll('.tab').forEach(b => {
+
+  b.onclick = () => {
+
+    document.querySelectorAll('.tab')
+
+      .forEach(x => x.classList.remove('active'));
+
+    b.classList.add('active');
+
+    document.querySelectorAll('.panel')
+
+      .forEach(p => p.classList.add('hidden'));
+
+    $(b.dataset.tab).classList.remove('hidden');
+
+  };
+
+});
+
+$('save').onclick = () => {
+
+  localStorage.setItem(
+
+    'ba_backend',
+
+    $('backend').value.trim()
+
+  );
+
+  localStorage.setItem(
+
+    'ba_refresh',
+
+    $('refresh').value
+
+  );
+
+  alert('Zapisano');
+
+};
+
+$('test').onclick = async () => {
+
+  const b =
+
+    $('backend').value.trim().replace(/\/$/,'');
+
+  if (!b) {
+
+    return alert('Wpisz Backend URL.');
+
+  }
+
+  try {
+
+    const r =
+
+      await fetch(b + '/api/health');
+
+    const j =
+
+      await r.json();
+
+    $('health').textContent =
+
+      `Połączenie OK.
+
+Sportmonks: ${j.configured.sportmonks ? 'OK' : 'BRAK'} · Betfair: ${j.configured.betfair ? 'OK' : 'BRAK'}`;
+
+  } catch(e) {
+
+    $('health').textContent =
+
+      'Błąd połączenia: ' + e.message;
+
+  }
+
+};
+
+$('backend').value =
+
+  localStorage.getItem('ba_backend') || '';
+
+$('refresh').value =
+
+  localStorage.getItem('ba_refresh') || 15;
+
+demoScan();
+
+setInterval(() => {
+
+  if (
+
+    $('mode').textContent === 'LIVE' &&
+
+    document.visibilityState === 'visible'
+
+  ) {
+
+    liveScan();
+
+  }
+
+}, Math.max(5,+$('refresh').value || 15) * 1000);
+
+if ('serviceWorker' in navigator) {
+
+  navigator.serviceWorker.register('service-worker.js');
+
+}
