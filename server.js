@@ -11,15 +11,50 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+function getDate(offsetDays = 0) {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
+}
+
+async function sportmonks(path) {
+  const token = process.env.SPORTMONKS_API_KEY;
+
+  if (!token) {
+    throw new Error("Brak SPORTMONKS_API_KEY w Render");
+  }
+
+  const separator = path.includes("?") ? "&" : "?";
+
+  const response = await fetch(
+    `https://api.sportmonks.com/v3/football${path}${separator}api_token=${token}`
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const error = new Error(
+      data?.message || `Sportmonks HTTP ${response.status}`
+    );
+
+    error.status = response.status;
+    error.data = data;
+
+    throw error;
+  }
+
+  return data;
+}
+
 // =========================
-// BASIC
+// HOME
 // =========================
 
 app.get("/", (req, res) => {
   res.json({
     name: "Bet Analyzer Live API",
     status: "online",
-    version: "1.2.0"
+    version: "1.3.0"
   });
 });
 
@@ -38,58 +73,129 @@ app.get("/api/health", (req, res) => {
 });
 
 // =========================
-// SPORTMONKS RAW
+// DIAGNOSTYKA — LIGI
+// =========================
+
+app.get("/api/leagues", async (req, res) => {
+  try {
+    const data = await sportmonks(
+      "/leagues?include=currentSeason&per_page=50"
+    );
+
+    const leagues = (data.data || []).map((league) => ({
+      id: league.id,
+      name: league.name,
+      countryId: league.country_id,
+      active: league.active,
+      currentSeason: league.currentSeason
+        ? {
+            id: league.currentSeason.id,
+            name: league.currentSeason.name
+          }
+        : null
+    }));
+
+    res.json({
+      count: leagues.length,
+      leagues
+    });
+
+  } catch (error) {
+    res.status(error.status || 500).json({
+      error: "Błąd Sportmonks",
+      message: error.message,
+      details: error.data || null
+    });
+  }
+});
+
+// =========================
+// DIAGNOSTYKA — DZISIAJ
+// =========================
+
+app.get("/api/today", async (req, res) => {
+  try {
+    const date = getDate(0);
+
+    const data = await sportmonks(
+      `/leagues/date/${date}?include=currentSeason`
+    );
+
+    res.json({
+      date,
+      count: (data.data || []).length,
+      leagues: data.data || [],
+      pagination: data.pagination || null,
+      rate_limit: data.rate_limit || null
+    });
+
+  } catch (error) {
+    res.status(error.status || 500).json({
+      error: "Błąd Sportmonks",
+      message: error.message,
+      details: error.data || null
+    });
+  }
+});
+
+// =========================
+// DIAGNOSTYKA — JUTRO
+// =========================
+
+app.get("/api/tomorrow", async (req, res) => {
+  try {
+    const date = getDate(1);
+
+    const data = await sportmonks(
+      `/leagues/date/${date}?include=currentSeason`
+    );
+
+    res.json({
+      date,
+      count: (data.data || []).length,
+      leagues: data.data || [],
+      pagination: data.pagination || null,
+      rate_limit: data.rate_limit || null
+    });
+
+  } catch (error) {
+    res.status(error.status || 500).json({
+      error: "Błąd Sportmonks",
+      message: error.message,
+      details: error.data || null
+    });
+  }
+});
+
+// =========================
+// SPORTMONKS — FIXTURES
 // =========================
 
 app.get("/api/sportmonks", async (req, res) => {
   try {
-    const token = process.env.SPORTMONKS_API_KEY;
+    const startDate = getDate(0);
+    const endDate = getDate(7);
 
-    if (!token) {
-      return res.status(500).json({
-        error: "Brak SPORTMONKS_API_KEY w Render"
-      });
-    }
-
-    const today = new Date();
-
-    const startDate = today.toISOString().slice(0, 10);
-
-    const futureDate = new Date(today);
-    futureDate.setDate(futureDate.getDate() + 7);
-
-    const endDate = futureDate.toISOString().slice(0, 10);
-
-    const url =
-      `https://api.sportmonks.com/v3/football/fixtures/between/` +
-      `${startDate}/${endDate}` +
-      `?api_token=${token}` +
-      `&include=participants` +
-      `&order=asc` +
-      `&per_page=50`;
-
-    const response = await fetch(url);
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return res.status(response.status).json(data);
-    }
+    const data = await sportmonks(
+      `/fixtures/between/${startDate}/${endDate}?include=participants&order=asc&per_page=50`
+    );
 
     res.json({
       period: {
         start: startDate,
         end: endDate
       },
+      count: (data.data || []).length,
       data: data.data || [],
       pagination: data.pagination || null,
       rate_limit: data.rate_limit || null
     });
 
   } catch (error) {
-    res.status(500).json({
-      error: "Błąd połączenia ze Sportmonks",
-      message: error.message
+    res.status(error.status || 500).json({
+      error: "Błąd Sportmonks",
+      message: error.message,
+      details: error.data || null
     });
   }
 });
@@ -100,45 +206,21 @@ app.get("/api/sportmonks", async (req, res) => {
 
 app.get("/api/scan", async (req, res) => {
   try {
-    const token = process.env.SPORTMONKS_API_KEY;
+    const startDate = getDate(0);
+    const endDate = getDate(7);
 
-    if (!token) {
-      return res.status(500).json({
-        error: "Brak SPORTMONKS_API_KEY"
-      });
-    }
-
-    const today = new Date();
-
-    const startDate = today.toISOString().slice(0, 10);
-
-    const futureDate = new Date(today);
-    futureDate.setDate(futureDate.getDate() + 7);
-
-    const endDate = futureDate.toISOString().slice(0, 10);
-
-    const url =
-      `https://api.sportmonks.com/v3/football/fixtures/between/` +
-      `${startDate}/${endDate}` +
-      `?api_token=${token}` +
-      `&include=participants` +
-      `&order=asc` +
-      `&per_page=50`;
-
-    const response = await fetch(url);
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return res.status(response.status).json(data);
-    }
+    const data = await sportmonks(
+      `/fixtures/between/${startDate}/${endDate}?include=participants&order=asc&per_page=50`
+    );
 
     const results = (data.data || [])
       .filter((fixture) => {
-        return fixture.starting_at;
+        return (
+          fixture.starting_at &&
+          new Date(fixture.starting_at.replace(" ", "T") + "Z") >= new Date()
+        );
       })
       .map((fixture) => {
-
         const participants = fixture.participants || [];
 
         const home =
@@ -174,7 +256,6 @@ app.get("/api/scan", async (req, res) => {
           pressure: "WAITING",
 
           fixtureId: fixture.id,
-
           start: fixture.starting_at,
 
           leagueId: fixture.league_id,
@@ -198,9 +279,10 @@ app.get("/api/scan", async (req, res) => {
     });
 
   } catch (error) {
-    res.status(500).json({
+    res.status(error.status || 500).json({
       error: "Błąd skanera",
-      message: error.message
+      message: error.message,
+      details: error.data || null
     });
   }
 });
@@ -210,7 +292,5 @@ app.get("/api/scan", async (req, res) => {
 // =========================
 
 app.listen(PORT, () => {
-  console.log(
-    `Bet Analyzer API running on port ${PORT}`
-  );
+  console.log(`Bet Analyzer API running on port ${PORT}`);
 });
