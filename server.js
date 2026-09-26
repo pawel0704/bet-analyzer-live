@@ -15,7 +15,7 @@ const BSD_API_KEY = process.env.BSD_API_KEY;
 const BSD_BASE = "https://sports.bzzoiro.com/api/v2";
 const BSD_PUBLIC = "https://sports.bzzoiro.com/api";
 
-const VERSION = "7.0.4";
+const VERSION = "7.0.5";
 const SOURCE = "BSD";
 
 const authHeaders = () => ({
@@ -36,13 +36,17 @@ function percent(value) {
   return n <= 1 ? n * 100 : n;
 }
 
-function isoDate(value) {
-  if (typeof value !== "string") return null;
-  return value.slice(0, 10);
-}
+function firstDefined(...values) {
+  for (const value of values) {
+    if (
+      value !== undefined &&
+      value !== null
+    ) {
+      return value;
+    }
+  }
 
-function arrayOrEmpty(value) {
-  return Array.isArray(value) ? value : [];
+  return null;
 }
 
 async function fetchJson(url) {
@@ -89,43 +93,39 @@ function extractPredictions(body) {
   return [];
 }
 
-async function fetchAllPredictions() {
-  const all = [];
+/*
+ * IMPORTANT:
+ * BSD supports date_from/date_to on predictions.
+ *
+ * We now ask BSD directly for the requested date
+ * instead of downloading everything and trying to
+ * infer the date locally.
+ */
+async function fetchPredictionsForDate(date) {
+  const url =
+    `${BSD_PUBLIC}/predictions/` +
+    `?date_from=${encodeURIComponent(date)}` +
+    `&date_to=${encodeURIComponent(date)}` +
+    `&limit=200` +
+    `&offset=0`;
 
-  let offset = 0;
-  let total = Infinity;
+  const result = await fetchJson(url);
 
-  while (offset < total && offset < 2000) {
-    const url =
-      `${BSD_PUBLIC}/predictions/` +
-      `?limit=200&offset=${offset}`;
-
-    const result = await fetchJson(url);
-
-    if (!result.ok) {
-      throw new Error(
-        `BSD predictions HTTP ${result.status}`
-      );
-    }
-
-    const rows = extractPredictions(result.body);
-
-    total =
-      numberOrNull(result.body?.count) ??
-      offset + rows.length;
-
-    all.push(...rows);
-
-    if (!rows.length || rows.length < 200) {
-      break;
-    }
-
-    offset += rows.length;
+  if (!result.ok) {
+    throw new Error(
+      `BSD predictions HTTP ${result.status}`
+    );
   }
 
+  const rows =
+    extractPredictions(result.body);
+
   return {
-    all,
-    total,
+    rows,
+    total:
+      numberOrNull(
+        result.body?.count
+      ) ?? rows.length,
   };
 }
 
@@ -162,36 +162,42 @@ function getProbability(row, market) {
       "over_15",
       "over15",
       "over_1_5",
+      "over_15_goals",
     ],
 
     under15: [
       "under_15",
       "under15",
       "under_1_5",
+      "under_15_goals",
     ],
 
     over25: [
       "over_25",
       "over25",
       "over_2_5",
+      "over_25_goals",
     ],
 
     under25: [
       "under_25",
       "under25",
       "under_2_5",
+      "under_25_goals",
     ],
 
     over35: [
       "over_35",
       "over35",
       "over_3_5",
+      "over_35_goals",
     ],
 
     under35: [
       "under_35",
       "under35",
       "under_3_5",
+      "under_35_goals",
     ],
 
     bttsYes: [
@@ -207,10 +213,15 @@ function getProbability(row, market) {
     ],
   };
 
-  for (const key of aliases[market] || []) {
-    const value = percent(
-      p?.[key] ?? row?.[key]
-    );
+  for (
+    const key of
+    aliases[market] || []
+  ) {
+    const value =
+      percent(
+        p?.[key] ??
+        row?.[key]
+      );
 
     if (value !== null) {
       return value;
@@ -224,134 +235,275 @@ function getProbability(row, market) {
    CANDIDATES
    ========================================================= */
 
-function buildCandidates(row) {
-  const home =
-    row?.home_team?.name ??
-    row?.home ??
-    row?.home_name ??
-    "";
+function getTeamName(
+  row,
+  side
+) {
+  if (side === "home") {
+    return (
+      row?.home_team?.name ??
+      row?.home?.name ??
+      row?.home ??
+      row?.home_name ??
+      ""
+    );
+  }
 
-  const away =
+  return (
     row?.away_team?.name ??
+    row?.away?.name ??
     row?.away ??
     row?.away_name ??
-    "";
+    ""
+  );
+}
 
-  const eventId =
+function getEventId(row) {
+  return (
     row?.event_id ??
     row?.eventId ??
-    row?.id;
+    row?.event?.id ??
+    row?.id
+  );
+}
 
-  const date =
+function getEventDate(row) {
+  return (
     row?.event_date ??
+    row?.eventDate ??
     row?.date ??
-    null;
+    row?.kickoff_at ??
+    row?.event?.event_date ??
+    row?.event?.date ??
+    row?.event?.kickoff_at ??
+    null
+  );
+}
 
-  const league =
+function getLeague(row) {
+  return (
     row?.league?.name ??
     row?.league_name ??
+    row?.competition?.name ??
     row?.league ??
-    null;
-
-  const confidence = percent(
-    row?.confidence ??
-    row?.model_confidence
+    null
   );
+}
+
+function buildCandidates(row) {
+  const home =
+    getTeamName(row, "home");
+
+  const away =
+    getTeamName(row, "away");
+
+  const eventId =
+    getEventId(row);
+
+  const date =
+    getEventDate(row);
+
+  const league =
+    getLeague(row);
+
+  const confidence =
+    percent(
+      row?.confidence ??
+      row?.model_confidence
+    );
 
   const homeProbability =
-    getProbability(row, "home");
+    getProbability(
+      row,
+      "home"
+    );
 
   const drawProbability =
-    getProbability(row, "draw");
+    getProbability(
+      row,
+      "draw"
+    );
 
   const awayProbability =
-    getProbability(row, "away");
+    getProbability(
+      row,
+      "away"
+    );
 
   const markets = [
     {
-      market: "DOUBLE_CHANCE",
-      pick: "1X",
+      market:
+        "DOUBLE_CHANCE",
+
+      pick:
+        "1X",
+
       probability:
         homeProbability !== null &&
         drawProbability !== null
-          ? homeProbability + drawProbability
+          ? homeProbability +
+            drawProbability
           : null,
     },
 
     {
-      market: "DOUBLE_CHANCE",
-      pick: "X2",
+      market:
+        "DOUBLE_CHANCE",
+
+      pick:
+        "X2",
+
       probability:
         awayProbability !== null &&
         drawProbability !== null
-          ? awayProbability + drawProbability
+          ? awayProbability +
+            drawProbability
           : null,
     },
 
     {
-      market: "1X2",
-      pick: "1",
-      probability: homeProbability,
+      market:
+        "1X2",
+
+      pick:
+        "1",
+
+      probability:
+        homeProbability,
     },
 
     {
-      market: "1X2",
-      pick: "X",
-      probability: drawProbability,
+      market:
+        "1X2",
+
+      pick:
+        "X",
+
+      probability:
+        drawProbability,
     },
 
     {
-      market: "1X2",
-      pick: "2",
-      probability: awayProbability,
+      market:
+        "1X2",
+
+      pick:
+        "2",
+
+      probability:
+        awayProbability,
     },
 
     {
-      market: "TOTAL",
-      pick: "OVER 1.5",
-      probability: getProbability(row, "over15"),
+      market:
+        "TOTAL",
+
+      pick:
+        "OVER 1.5",
+
+      probability:
+        getProbability(
+          row,
+          "over15"
+        ),
     },
 
     {
-      market: "TOTAL",
-      pick: "UNDER 1.5",
-      probability: getProbability(row, "under15"),
+      market:
+        "TOTAL",
+
+      pick:
+        "UNDER 1.5",
+
+      probability:
+        getProbability(
+          row,
+          "under15"
+        ),
     },
 
     {
-      market: "TOTAL",
-      pick: "OVER 2.5",
-      probability: getProbability(row, "over25"),
+      market:
+        "TOTAL",
+
+      pick:
+        "OVER 2.5",
+
+      probability:
+        getProbability(
+          row,
+          "over25"
+        ),
     },
 
     {
-      market: "TOTAL",
-      pick: "UNDER 2.5",
-      probability: getProbability(row, "under25"),
+      market:
+        "TOTAL",
+
+      pick:
+        "UNDER 2.5",
+
+      probability:
+        getProbability(
+          row,
+          "under25"
+        ),
     },
 
     {
-      market: "TOTAL",
-      pick: "OVER 3.5",
-      probability: getProbability(row, "over35"),
+      market:
+        "TOTAL",
+
+      pick:
+        "OVER 3.5",
+
+      probability:
+        getProbability(
+          row,
+          "over35"
+        ),
     },
 
     {
-      market: "TOTAL",
-      pick: "UNDER 3.5",
-      probability: getProbability(row, "under35"),
+      market:
+        "TOTAL",
+
+      pick:
+        "UNDER 3.5",
+
+      probability:
+        getProbability(
+          row,
+          "under35"
+        ),
     },
 
     {
-      market: "BTTS",
-      pick: "BTTS YES",
-      probability: getProbability(row, "bttsYes"),
+      market:
+        "BTTS",
+
+      pick:
+        "BTTS YES",
+
+      probability:
+        getProbability(
+          row,
+          "bttsYes"
+        ),
     },
 
     {
-      market: "BTTS",
-      pick: "BTTS NO",
-      probability: getProbability(row, "bttsNo"),
+      market:
+        "BTTS",
+
+      pick:
+        "BTTS NO",
+
+      probability:
+        getProbability(
+          row,
+          "bttsNo"
+        ),
     },
   ];
 
@@ -369,14 +521,14 @@ function buildCandidates(row) {
       const fairOdds =
         probability > 0
           ? Math.round(
-              (100 / probability) * 1000
+              (100 / probability) *
+              1000
             ) / 1000
           : null;
 
       /*
-       * IMPORTANT:
-       * Existing model score is preserved.
-       * No new weighting system is introduced here.
+       * EXISTING SCORE.
+       * NO WEIGHT SYSTEM CHANGE.
        */
       const score =
         probability +
@@ -402,7 +554,10 @@ function buildCandidates(row) {
 
         marketKey:
           item.pick
-            .replace(/[^A-Z0-9]+/gi, "")
+            .replace(
+              /[^A-Z0-9]+/gi,
+              ""
+            )
             .toUpperCase(),
 
         probability,
@@ -415,7 +570,8 @@ function buildCandidates(row) {
 
         value: null,
 
-        recommendationStrength: 0,
+        recommendationStrength:
+          0,
 
         bsdRecommendation:
           row?.recommendation ??
@@ -424,13 +580,17 @@ function buildCandidates(row) {
 
         score,
 
-        oddsSource: "UNAVAILABLE",
+        oddsSource:
+          "UNAVAILABLE",
 
-        bookmaker: null,
+        bookmaker:
+          null,
 
-        marketMovement: null,
+        marketMovement:
+          null,
 
-        exchangeMovement: null,
+        exchangeMovement:
+          null,
 
         status:
           row?.status ??
@@ -440,126 +600,159 @@ function buildCandidates(row) {
 }
 
 /* =========================================================
-   BSD EVENT ODDS
-   =========================================================
-
-   Official football endpoint:
-
-   /api/v2/events/{eventId}/odds/
-
-   BSD returns:
-
-   home_win
-   draw
-   away_win
-
-   over_15_goals
-   under_15_goals
-   over_25_goals
-   under_25_goals
-   over_35_goals
-   under_35_goals
-
-   btts_yes
-   btts_no
-
-   This is now parsed directly.
-   No guessing from generic market names.
+   ODDS PARSER
    ========================================================= */
 
 function normalizeEventOdds(body) {
-  const odds =
+  /*
+   * BSD can expose the odds block directly,
+   * or under body.odds / body.data.odds.
+   */
+  const source =
     body?.odds ??
     body?.data?.odds ??
     body?.result?.odds ??
-    null;
+    body;
 
-  if (!odds || typeof odds !== "object") {
+  if (
+    !source ||
+    typeof source !== "object"
+  ) {
     return {};
   }
+
+  const matchWinner =
+    source.match_winner ??
+    source.matchWinner ??
+    {};
+
+  const overUnder =
+    source.over_under ??
+    source.overUnder ??
+    {};
+
+  const btts =
+    source.btts ??
+    {};
 
   return {
     "1":
       numberOrNull(
-        odds.home_win ??
-        odds.match_winner?.home
+        firstDefined(
+          source.home_win,
+          source.home,
+          matchWinner.home
+        )
       ),
 
     "X":
       numberOrNull(
-        odds.draw ??
-        odds.match_winner?.draw
+        firstDefined(
+          source.draw,
+          matchWinner.draw
+        )
       ),
 
     "2":
       numberOrNull(
-        odds.away_win ??
-        odds.match_winner?.away
+        firstDefined(
+          source.away_win,
+          source.away,
+          matchWinner.away
+        )
       ),
 
     OVER15:
       numberOrNull(
-        odds.over_15_goals ??
-        odds.over_15 ??
-        odds.over15 ??
-        odds.over_under?.over_15
+        firstDefined(
+          source.over_15_goals,
+          source.over_15,
+          source.over15,
+          overUnder.over_15,
+          overUnder.over15
+        )
       ),
 
     UNDER15:
       numberOrNull(
-        odds.under_15_goals ??
-        odds.under_15 ??
-        odds.under15 ??
-        odds.over_under?.under_15
+        firstDefined(
+          source.under_15_goals,
+          source.under_15,
+          source.under15,
+          overUnder.under_15,
+          overUnder.under15
+        )
       ),
 
     OVER25:
       numberOrNull(
-        odds.over_25_goals ??
-        odds.over_25 ??
-        odds.over25 ??
-        odds.over_under?.over_25
+        firstDefined(
+          source.over_25_goals,
+          source.over_25,
+          source.over25,
+          overUnder.over_25,
+          overUnder.over25
+        )
       ),
 
     UNDER25:
       numberOrNull(
-        odds.under_25_goals ??
-        odds.under_25 ??
-        odds.under25 ??
-        odds.over_under?.under_25
+        firstDefined(
+          source.under_25_goals,
+          source.under_25,
+          source.under25,
+          overUnder.under_25,
+          overUnder.under25
+        )
       ),
 
     OVER35:
       numberOrNull(
-        odds.over_35_goals ??
-        odds.over_35 ??
-        odds.over35 ??
-        odds.over_under?.over_35
+        firstDefined(
+          source.over_35_goals,
+          source.over_35,
+          source.over35,
+          overUnder.over_35,
+          overUnder.over35
+        )
       ),
 
     UNDER35:
       numberOrNull(
-        odds.under_35_goals ??
-        odds.under_35 ??
-        odds.under35 ??
-        odds.over_under?.under_35
+        firstDefined(
+          source.under_35_goals,
+          source.under_35,
+          source.under35,
+          overUnder.under_35,
+          overUnder.under35
+        )
       ),
 
     BTTSYES:
       numberOrNull(
-        odds.btts_yes ??
-        odds.btts?.yes
+        firstDefined(
+          source.btts_yes,
+          btts.yes
+        )
       ),
 
     BTTSNO:
       numberOrNull(
-        odds.btts_no ??
-        odds.btts?.no
+        firstDefined(
+          source.btts_no,
+          btts.no
+        )
       ),
   };
 }
 
-async function fetchEventOdds(eventId) {
+/* =========================================================
+   EVENT ODDS
+   ========================================================= */
+
+async function fetchEventOdds(
+  eventId
+) {
   const endpoint =
     `${BSD_BASE}/events/${eventId}/odds/`;
 
@@ -568,11 +761,14 @@ async function fetchEventOdds(eventId) {
 
   return {
     endpoint,
+
     ...result,
 
     odds:
       result.ok
-        ? normalizeEventOdds(result.body)
+        ? normalizeEventOdds(
+            result.body
+          )
         : {},
   };
 }
@@ -581,9 +777,14 @@ async function fetchEventOdds(eventId) {
    MARKET KEY
    ========================================================= */
 
-function marketKeyFromPick(pick) {
+function marketKeyFromPick(
+  pick
+) {
   return pick
-    .replace(/[^A-Z0-9]+/gi, "")
+    .replace(
+      /[^A-Z0-9]+/gi,
+      ""
+    )
     .toUpperCase();
 }
 
@@ -591,7 +792,10 @@ function marketKeyFromPick(pick) {
    APPLY ODDS
    ========================================================= */
 
-function applyOdds(candidate, oddsData) {
+function applyOdds(
+  candidate,
+  oddsData
+) {
   const key =
     marketKeyFromPick(
       candidate.pick
@@ -601,12 +805,14 @@ function applyOdds(candidate, oddsData) {
     oddsData[key] ??
     null;
 
-  candidate.odds = odds;
+  candidate.odds =
+    odds;
 
   candidate.fairOdds =
     candidate.probability > 0
       ? Math.round(
-          (100 / candidate.probability) *
+          (100 /
+            candidate.probability) *
           1000
         ) / 1000
       : null;
@@ -617,7 +823,8 @@ function applyOdds(candidate, oddsData) {
       ? Math.round(
           (
             odds *
-            (candidate.probability / 100) -
+              (candidate.probability /
+                100) -
             1
           ) * 10000
         ) / 10000
@@ -638,24 +845,22 @@ function applyOdds(candidate, oddsData) {
 
 /* =========================================================
    RANKING
-   =========================================================
-
-   Existing score remains the primary model score.
-
-   Odds/value are used only after the model score,
-   not as a replacement for the model weights.
    ========================================================= */
 
-function rankingScore(candidate) {
+function rankingScore(
+  candidate
+) {
   let score =
     candidate.score;
 
   /*
-   * Keep existing score philosophy.
-   * Value is a secondary market-quality signal.
+   * Existing score stays primary.
+   * Odds/value remain secondary.
    */
 
-  if (candidate.value !== null) {
+  if (
+    candidate.value !== null
+  ) {
     score +=
       candidate.value * 20;
   } else {
@@ -669,13 +874,16 @@ function rankingScore(candidate) {
    ROOT
    ========================================================= */
 
-app.get("/", (_req, res) => {
-  res.json({
-    ok: true,
-    version: VERSION,
-    source: SOURCE,
-  });
-});
+app.get(
+  "/",
+  (_req, res) => {
+    res.json({
+      ok: true,
+      version: VERSION,
+      source: SOURCE,
+    });
+  }
+);
 
 /* =========================================================
    TOP PICKS
@@ -694,33 +902,31 @@ app.get(
       const started =
         Date.now();
 
+      /*
+       * STEP 1
+       * Ask BSD directly for the date.
+       */
       const predictionData =
-        await fetchAllPredictions();
-
-      const all =
-        predictionData.all;
-
-      const dateRows =
-        all.filter(
-          (row) =>
-            isoDate(
-              row?.event_date ??
-              row?.date ??
-              row?.event?.date
-            ) === date
+        await fetchPredictionsForDate(
+          date
         );
 
+      const dateRows =
+        predictionData.rows;
+
+      /*
+       * STEP 2
+       * Build all market candidates.
+       */
       let candidates =
         dateRows.flatMap(
           buildCandidates
         );
 
       /*
-       * Only 30 events are enriched with odds.
-       * This keeps the BSD request load reasonable.
-       *
-       * The selection here uses the EXISTING
-       * model score only.
+       * STEP 3
+       * Select preliminary events
+       * using the existing model score.
        */
       const preliminaryEvents =
         Array.from(
@@ -744,6 +950,10 @@ app.get(
       let successful = 0;
       let failed = 0;
 
+      /*
+       * STEP 4
+       * Get odds for each event.
+       */
       for (
         const base
         of preliminaryEvents
@@ -755,7 +965,9 @@ app.get(
             base.eventId
           );
 
-        if (oddsResult.ok) {
+        if (
+          oddsResult.ok
+        ) {
           successful++;
         } else {
           failed++;
@@ -780,14 +992,15 @@ app.get(
       }
 
       /*
-       * Rank after real odds have been attached.
+       * STEP 5
+       * Rank after odds are attached.
        */
-
       const ranked =
         candidates
           .map(
             (candidate) => ({
               ...candidate,
+
               internalRank:
                 rankingScore(
                   candidate
@@ -801,13 +1014,12 @@ app.get(
           );
 
       /*
-       * Maximum 5.
-       * Never more than one pick
-       * from the same event.
+       * STEP 6
+       * Final maximum 5.
        *
-       * Do not force 5 picks.
+       * Never force five.
+       * No duplicate event.
        */
-
       const topPicks = [];
 
       const usedEvents =
@@ -828,9 +1040,7 @@ app.get(
         }
 
         /*
-         * A pick without an actual BSD
-         * price is not allowed into final
-         * top picks.
+         * No real odds = no final pick.
          */
         if (
           candidate.odds === null
@@ -839,12 +1049,8 @@ app.get(
         }
 
         /*
-         * Maximum 3 total markets
-         * in the final five.
-         *
-         * This prevents the list from
-         * becoming five identical
-         * Over/Under selections.
+         * Maximum three TOTAL
+         * selections.
          */
         if (
           candidate.market ===
@@ -870,9 +1076,6 @@ app.get(
           ...output
         } = candidate;
 
-        /*
-         * No exchange movement is invented.
-         */
         output.exchangeMovement =
           null;
 
@@ -912,10 +1115,10 @@ app.get(
         },
 
         predictionsTotal:
-          all.length,
+          predictionData.total,
 
         predictionsDownloaded:
-          all.length,
+          dateRows.length,
 
         predictionsFound:
           dateRows.length,
@@ -926,7 +1129,8 @@ app.get(
         qualificationCount:
           topPicks.length,
 
-        maxTopPicks: 5,
+        maxTopPicks:
+          5,
 
         oddsStatus: {
           endpoint:
@@ -940,7 +1144,7 @@ app.get(
 
           message:
             successful > 0
-              ? "Real BSD consensus odds were retrieved and included in ranking."
+              ? "Real BSD event odds were retrieved and included in ranking."
               : "No BSD event odds were retrieved.",
         },
 
@@ -1016,7 +1220,9 @@ app.get(
     } catch (error) {
       res.status(500).json({
         version: VERSION,
+
         eventId,
+
         error:
           error?.message ??
           "Unknown error",
