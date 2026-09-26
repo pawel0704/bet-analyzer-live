@@ -50,6 +50,7 @@ const edge = (probability, odds) => {
 };
 const firstObject = (...values) =>
   values.find(v => v && typeof v === "object" && !Array.isArray(v)) || null;
+
 const norm = v => String(v ?? "").toUpperCase().replace(/[\s_-]/g, "");
 
 function cacheGet(key) {
@@ -77,7 +78,11 @@ async function bsd(path, { wom = false, odds = false } = {}) {
     throw e;
   }
 
-  const base = wom ? WOM_BASE_URL : odds ? ODDS_BASE_URL : BSD_BASE_URL;
+  const base = wom
+    ? WOM_BASE_URL
+    : odds
+      ? ODDS_BASE_URL
+      : BSD_BASE_URL;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -137,6 +142,7 @@ async function safe(path, options = {}) {
 
 function collection(data) {
   if (Array.isArray(data)) return data;
+
   if (!data || typeof data !== "object") return [];
 
   for (const key of [
@@ -152,6 +158,7 @@ function collection(data) {
   }
 
   if (Array.isArray(data.data)) return data.data;
+
   if (data.data && typeof data.data === "object") {
     return collection(data.data);
   }
@@ -167,22 +174,25 @@ function status(raw) {
     ""
   ).toLowerCase();
 
-  if (["upcoming", "scheduled", "notstarted", "not_started"].includes(s)) {
+  if (
+    ["upcoming", "scheduled", "notstarted", "not_started"].includes(s)
+  ) {
     return "notstarted";
   }
 
-  if (["live", "inplay", "in-play", "in_progress", "inprogress"].includes(s)) {
+  if (
+    ["live", "inplay", "in-play", "in_progress", "inprogress"].includes(s)
+  ) {
     return "live";
   }
 
-  if (["finished", "complete", "completed", "ended"].includes(s)) {
+  if (
+    ["finished", "complete", "completed", "ended"].includes(s)
+  ) {
     return "finished";
   }
 
-  if (["cancelled", "canceled"].includes(s)) {
-    return "cancelled";
-  }
-
+  if (["cancelled", "canceled"].includes(s)) return "cancelled";
   if (s === "postponed") return "postponed";
 
   return "unknown";
@@ -260,11 +270,17 @@ function normalizeEvent(raw) {
     away.id = num(raw.away_team_id ?? away.id);
   }
 
-  if (raw.home_team && typeof raw.home_team === "string") {
+  if (
+    raw.home_team &&
+    typeof raw.home_team === "string"
+  ) {
     home.name = raw.home_team;
   }
 
-  if (raw.away_team && typeof raw.away_team === "string") {
+  if (
+    raw.away_team &&
+    typeof raw.away_team === "string"
+  ) {
     away.name = raw.away_team;
   }
 
@@ -285,6 +301,7 @@ function normalizeEvent(raw) {
       raw.name ??
       fixture.name ??
       `${home.name} – ${away.name}`,
+
     date:
       raw.event_date ??
       raw.date ??
@@ -299,7 +316,9 @@ function normalizeEvent(raw) {
       fixture.utcDate ??
       fixture.kickoff ??
       null,
+
     status: status(raw),
+
     league:
       raw.league?.name ??
       raw.competition?.name ??
@@ -307,21 +326,26 @@ function normalizeEvent(raw) {
       (typeof raw.league === "string"
         ? raw.league
         : null),
+
     leagueId: num(
       raw.league?.id ??
       raw.leagueId
     ),
+
     seasonId: num(
       raw.season?.id ??
       raw.seasonId
     ),
+
     home,
     away,
+
     referee: firstObject(
       raw.referee,
       raw.official,
       fixture.referee
     ),
+
     raw
   };
 }
@@ -554,135 +578,115 @@ async function getPredictionMap() {
 }
 
 function marketKey(market, line, selection) {
-  const raw = String(
-    market ?? ""
-  ).toUpperCase().trim();
-
-  const m = norm(raw);
-  const s = norm(selection);
-
-  const explicitLine =
-    line === null ||
-    line === undefined ||
-    line === ""
-      ? null
-      : num(line);
-
-  const embeddedLine =
-    raw.match(
-      /(?:OU|OVER_UNDER|OVERUNDER|TOTAL|GOALS)[_ -]?(\d+(?:\.\d+)?)/i
-    ) ||
-    m.match(
-      /(?:OU|OVERUNDER|TOTAL|GOALS)(\d+(?:\.\d+)?)/i
-    );
-
-  const selectionLine =
-    explicitLine ??
-    (embeddedLine
-      ? Number(embeddedLine[1])
-      : null);
-
-  const ftOnly =
-    !raw ||
-    /(?:^|[_ -])FT(?:$|[_ -])/.test(raw) ||
-    !/(?:_1H|_2H|_HT$)/.test(raw);
-
-  if (!ftOnly) return null;
+  const raw = String(market ?? "").toUpperCase().trim();
+  const compact = norm(raw);
+  const sel = String(selection ?? "").toUpperCase().trim();
 
   if (
-    /^(?:1X2|MATCHRESULT|RESULT|WINNER)/.test(m)
+    compact === "1X2HOME" ||
+    compact === "1X2HOMEFT" ||
+    compact === "MATCHWINNERHOME"
   ) {
-    if (
-      ["HOME", "1"].includes(s) ||
-      /1X2_HOME/.test(m)
-    ) {
-      return "HOME";
-    }
-
-    if (
-      ["DRAW", "X"].includes(s) ||
-      /1X2_DRAW/.test(m)
-    ) {
-      return "DRAW";
-    }
-
-    if (
-      ["AWAY", "2"].includes(s) ||
-      /1X2_AWAY/.test(m)
-    ) {
-      return "AWAY";
-    }
+    return "HOME";
   }
 
   if (
-    m.startsWith("DOUBLE") ||
-    m === "DC" ||
-    m.startsWith("DOUBLECHANCE")
+    compact === "1X2DRAW" ||
+    compact === "1X2DRAWFT" ||
+    compact === "MATCHWINNERDRAW"
   ) {
-    if (
-      s === "1X" ||
-      m.includes("1X")
-    ) {
-      return "DC1X";
-    }
-
-    if (
-      s === "X2" ||
-      m.includes("X2")
-    ) {
-      return "DCX2";
-    }
+    return "DRAW";
   }
 
   if (
-    m.startsWith("OU") ||
-    m.includes("OVERUNDER") ||
-    m.startsWith("TOTAL") ||
-    m.startsWith("GOALS")
+    compact === "1X2AWAY" ||
+    compact === "1X2AWAYFT" ||
+    compact === "MATCHWINNERAWAY"
   ) {
-    if (
-      s.includes("OVER") &&
-      selectionLine === 1.5
-    ) {
-      return "OVER15";
-    }
-
-    if (
-      s.includes("OVER") &&
-      selectionLine === 2.5
-    ) {
-      return "OVER25";
-    }
-
-    if (
-      s.includes("UNDER") &&
-      selectionLine === 2.5
-    ) {
-      return "UNDER25";
-    }
-
-    if (
-      s.includes("UNDER") &&
-      selectionLine === 3.5
-    ) {
-      return "UNDER35";
-    }
+    return "AWAY";
   }
 
   if (
-    m.includes("BTTS") ||
-    m.includes("BOTHTEAM")
+    compact === "OU15OVERFT" ||
+    compact === "OU15OVER"
   ) {
+    return "OVER15";
+  }
+
+  if (
+    compact === "OU15UNDERFT" ||
+    compact === "OU15UNDER"
+  ) {
+    return "UNDER15";
+  }
+
+  if (
+    compact === "OU25OVERFT" ||
+    compact === "OU25OVER"
+  ) {
+    return "OVER25";
+  }
+
+  if (
+    compact === "OU25UNDERFT" ||
+    compact === "OU25UNDER"
+  ) {
+    return "UNDER25";
+  }
+
+  if (
+    compact === "OU35UNDERFT" ||
+    compact === "OU35UNDER"
+  ) {
+    return "UNDER35";
+  }
+
+  if (
+    compact === "BTTSYESFT" ||
+    compact === "BTTSYES"
+  ) {
+    return "BTTS_YES";
+  }
+
+  if (
+    compact === "BTTSNOFT" ||
+    compact === "BTTSNO"
+  ) {
+    return "BTTS_NO";
+  }
+
+  const lineNumber = num(
+    line ??
+    String(raw).match(/(\d+(?:\.\d+)?)/)?.[1]
+  );
+
+  if (
+    compact.includes("OU") &&
+    lineNumber !== null
+  ) {
+    if (sel.includes("OVER")) {
+      if (lineNumber === 1.5) return "OVER15";
+      if (lineNumber === 2.5) return "OVER25";
+    }
+
+    if (sel.includes("UNDER")) {
+      if (lineNumber === 1.5) return "UNDER15";
+      if (lineNumber === 2.5) return "UNDER25";
+      if (lineNumber === 3.5) return "UNDER35";
+    }
+  }
+
+  if (compact.includes("BTTS")) {
     if (
-      ["YES", "Y"].includes(s) ||
-      m.includes("BTTSYES")
+      sel === "YES" ||
+      compact.includes("YES")
     ) {
       return "BTTS_YES";
     }
 
     if (
-      ["NO", "N"].includes(s) ||
-      m.includes("BTTSNO")
+      sel === "NO" ||
+      compact.includes("NO")
     ) {
       return "BTTS_NO";
     }
@@ -691,547 +695,78 @@ function marketKey(market, line, selection) {
   return null;
 }
 
-function normalizeMovement(
-  movement,
-  currentOdds = null,
-  previousOdds = null
-) {
-  const m = String(
-    movement ?? ""
-  ).toUpperCase();
-
-  if (
-    ["SHORTENING", "DRIFTING", "STABLE"].includes(m)
-  ) {
-    return m;
-  }
-
-  if (
-    ["DOWN", "FALL", "FALLING"].includes(m)
-  ) {
-    return "SHORTENING";
-  }
-
-  if (
-    ["UP", "RISE", "RISING"].includes(m)
-  ) {
-    return "DRIFTING";
-  }
-
-  const current = num(currentOdds);
-  const previous = num(previousOdds);
-
-  if (
-    current !== null &&
-    previous !== null &&
-    previous > 1
-  ) {
-    const change =
-      (current - previous) /
-      previous *
-      100;
-
-    if (change < -0.15) return "SHORTENING";
-    if (change > 0.15) return "DRIFTING";
-
-    return "STABLE";
-  }
-
-  return "UNKNOWN";
-}
-
-function emptyMarkets() {
-  return Object.fromEntries(
-    [
-      "HOME",
-      "DRAW",
-      "AWAY",
-      "OVER15",
-      "OVER25",
-      "UNDER25",
-      "UNDER35",
-      "BTTS_YES",
-      "BTTS_NO",
-      "DC1X",
-      "DCX2"
-    ].map(k => [k, []])
-  );
-}
-
-function extractOdds(data) {
-  const out = emptyMarkets();
-
-  if (!data || typeof data !== "object") {
-    return out;
-  }
-
-  const push = (
-    key,
-    odds,
-    previousOdds = null,
-    movement = null,
-    meta = {}
-  ) => {
-    const o = num(odds);
-
-    if (
-      !key ||
-      o === null ||
-      o <= 1
-    ) {
-      return;
-    }
-
-    out[key].push({
-      odds: o,
-      previousOdds: num(previousOdds),
-      movement: normalizeMovement(
-        movement,
-        o,
-        previousOdds
-      ),
-      ...meta
-    });
-  };
-
-  const root =
-    firstObject(
-      data.odds,
-      data.consensus,
-      data.data?.odds
-    ) || {};
-
-  const mw =
-    firstObject(
-      root.match_winner,
-      root.matchWinner,
-      root["1x2"]
-    ) || {};
-
-  const ou =
-    firstObject(
-      root.over_under,
-      root.overUnder,
-      root.goals
-    ) || {};
-
-  const bt =
-    firstObject(
-      root.btts,
-      root.BTTS
-    ) || {};
-
-  const officialValue = (
-    value,
-    previous = null,
-    movement = null
-  ) => {
-    if (
-      value &&
-      typeof value === "object"
-    ) {
-      return [
-        value.price ??
-          value.decimal_odds ??
-          value.odds,
-        value.previous_price ??
-          value.previous_decimal_odds ??
-          value.previous_odds ??
-          previous,
-        value.movement ??
-          movement
-      ];
-    }
-
-    return [
-      value,
-      previous,
-      movement
-    ];
-  };
-
-  const [
-    homeOdds,
-    homePrev,
-    homeMove
-  ] = officialValue(
-    mw.home ??
-      root.home_win ??
-      root.home,
-    root.previous_home_win ??
-      root.previous_home,
-    root.movement_home
-  );
-
-  const [
-    drawOdds,
-    drawPrev,
-    drawMove
-  ] = officialValue(
-    mw.draw ??
-      root.draw,
-    root.previous_draw,
-    root.movement_draw
-  );
-
-  const [
-    awayOdds,
-    awayPrev,
-    awayMove
-  ] = officialValue(
-    mw.away ??
-      root.away_win ??
-      root.away,
-    root.previous_away ??
-      root.previous_away_win,
-    root.movement_away
-  );
-
-  push(
-    "HOME",
-    homeOdds,
-    homePrev,
-    homeMove
-  );
-
-  push(
-    "DRAW",
-    drawOdds,
-    drawPrev,
-    drawMove
-  );
-
-  push(
-    "AWAY",
-    awayOdds,
-    awayPrev,
-    awayMove
-  );
-
-  const [
-    over15,
-    over15Prev,
-    over15Move
-  ] = officialValue(
-    ou.over_15 ??
-      root.over_15_goals ??
-      root.over15,
-    root.previous_over_15,
-    root.movement_over_15
-  );
-
-  const [
-    over25,
-    over25Prev,
-    over25Move
-  ] = officialValue(
-    ou.over_25 ??
-      root.over_25_goals ??
-      root.over25,
-    root.previous_over_25,
-    root.movement_over_25
-  );
-
-  const [
-    under25,
-    under25Prev,
-    under25Move
-  ] = officialValue(
-    ou.under_25 ??
-      root.under_25_goals ??
-      root.under25,
-    root.previous_under_25,
-    root.movement_under_25
-  );
-
-  const [
-    under35,
-    under35Prev,
-    under35Move
-  ] = officialValue(
-    ou.under_35 ??
-      root.under_35_goals ??
-      root.under35,
-    root.previous_under_35,
-    root.movement_under_35
-  );
-
-  push(
-    "OVER15",
-    over15,
-    over15Prev,
-    over15Move
-  );
-
-  push(
-    "OVER25",
-    over25,
-    over25Prev,
-    over25Move
-  );
-
-  push(
-    "UNDER25",
-    under25,
-    under25Prev,
-    under25Move
-  );
-
-  push(
-    "UNDER35",
-    under35,
-    under35Prev,
-    under35Move
-  );
-
-  push(
-    "BTTS_YES",
-    bt.yes ??
-      root.btts_yes,
-    root.previous_btts_yes,
-    root.movement_btts_yes
-  );
-
-  push(
-    "BTTS_NO",
-    bt.no ??
-      root.btts_no,
-    root.previous_btts_no,
-    root.movement_btts_no
-  );
-
-  for (const row of collection(data)) {
-    const key = marketKey(
-      row.market ??
-        row.market_code ??
-        row.kind ??
-        row.type,
-      row.line ??
-        row.market_line,
-      row.selection ??
-        row.outcome ??
-        row.outcome_name ??
-        row.name
-    );
-
-    push(
-      key,
-      row.decimal_odds ??
-        row.price ??
-        row.odds ??
-        row.value,
-      row.previous_decimal_odds ??
-        row.previous_price ??
-        row.previous_odds ??
-        row.previousOdds,
-      row.movement,
-      {
-        bookmaker:
-          row.bookmaker ??
-          row.bookmaker_name ??
-          row.bookmakerName ??
-          null,
-        isMaxQuote:
-          row.is_max_quote === true ||
-          row.isMaxQuote === true ||
-          row.best === true,
-        capturedAt:
-          row.updated_at ??
-          row.captured_at ??
-          null,
-        line: num(
-          row.line ??
-          row.market_line
-        )
-      }
-    );
-  }
-
-  for (const book of arr(data.bookmakers)) {
-    const name =
-      book.bookmaker ??
-      book.bookmaker_name ??
-      book.bookmakerName ??
-      book.bookie ??
-      null;
-
-    push(
-      "HOME",
-      book.odds_home,
-      book.previous_odds_home,
-      book.movement_home,
-      { bookmaker: name }
-    );
-
-    push(
-      "DRAW",
-      book.odds_draw,
-      book.previous_odds_draw,
-      book.movement_draw,
-      { bookmaker: name }
-    );
-
-    push(
-      "AWAY",
-      book.odds_away,
-      book.previous_odds_away,
-      book.movement_away,
-      { bookmaker: name }
-    );
-  }
-
-  for (const market of arr(data.markets)) {
-    const kind =
-      market.market_kind ??
-      market.kind ??
-      market.market ??
-      market.type;
-
-    const line =
-      market.market_line ??
-      market.line;
-
-    const period = String(
-      market.market_period ??
-      market.period ??
-      "FT"
-    ).toUpperCase();
-
-    if (period !== "FT") continue;
-
-    for (const book of arr(market.bookmakers)) {
-      const name =
-        book.bookmaker ??
-        book.bookmaker_name ??
-        book.bookmaker_slug ??
-        null;
-
-      const prices =
-        book.prices ||
-        book.odds ||
-        {};
-
-      for (const [
-        selection,
-        value
-      ] of Object.entries(prices)) {
-        const v =
-          value &&
-          typeof value === "object"
-            ? value
-            : {};
-
-        push(
-          marketKey(
-            kind,
-            line,
-            selection
-          ),
-          v.price ??
-            v.decimal_odds ??
-            v.odds ??
-            (typeof value === "number"
-              ? value
-              : null),
-          v.previous_price ??
-            v.previous_decimal_odds ??
-            v.previous_odds,
-          v.movement,
-          {
-            bookmaker: name,
-            line: num(line)
-          }
-        );
-      }
-    }
-  }
-
-  for (const key of Object.keys(out)) {
-    const seen = new Set();
-
-    out[key] = out[key].filter(row => {
-      const id =
-        `${row.bookmaker || "CONSENSUS"}|${row.odds}|${row.previousOdds ?? ""}|${row.line ?? ""}`;
-
-      if (seen.has(id)) return false;
-
-      seen.add(id);
-      return true;
-    });
-  }
-
-  return out;
-}
-
 function movementFor(rows) {
-  const valid = arr(rows).filter(
-    x =>
-      num(x.odds) > 1 &&
-      num(x.previousOdds) > 1
-  );
+  const row = arr(rows)[0];
 
-  if (!valid.length) {
+  if (!row) {
     return {
       movement: "UNKNOWN",
-      samples: 0,
-      changePercent: null,
-      confidence: 0
+      odds: null,
+      previousOdds: null
     };
   }
 
-  const changes = valid.map(
-    x =>
-      (x.odds - x.previousOdds) /
-      x.previousOdds *
-      100
+  const odds = num(
+    row.odds ??
+    row.price ??
+    row.decimal_odds
   );
 
-  const avg =
-    changes.reduce(
-      (a, b) => a + b,
-      0
-    ) /
-    changes.length;
+  const previousOdds = num(
+    row.previousOdds ??
+    row.previousPrice ??
+    row.previous_price ??
+    row.previous_decimal_odds
+  );
 
-  const shortening =
-    changes.filter(
-      x => x < -0.15
-    ).length;
+  if (
+    odds === null ||
+    previousOdds === null
+  ) {
+    return {
+      movement: "UNKNOWN",
+      odds,
+      previousOdds
+    };
+  }
 
-  const drifting =
-    changes.filter(
-      x => x > 0.15
-    ).length;
+  if (odds < previousOdds) {
+    return {
+      movement: "SHORTENING",
+      odds,
+      previousOdds
+    };
+  }
 
-  const movement =
-    shortening > drifting &&
-    avg < -0.15
-      ? "SHORTENING"
-      : drifting > shortening &&
-          avg > 0.15
-        ? "DRIFTING"
-        : "STABLE";
+  if (odds > previousOdds) {
+    return {
+      movement: "DRIFTING",
+      odds,
+      previousOdds
+    };
+  }
 
   return {
-    movement,
-    samples: valid.length,
-    changePercent:
-      Number(avg.toFixed(2)),
-    confidence: Math.round(
-      Math.max(
-        shortening,
-        drifting
-      ) /
-      valid.length *
-      100
-    )
+    movement: "STABLE",
+    odds,
+    previousOdds
   };
 }
 
 function bestQuote(rows) {
-  const valid = arr(rows).filter(
-    x => num(x.odds) > 1
-  );
+  const valid = arr(rows)
+    .map(row => ({
+      ...row,
+      odds: num(
+        row?.odds ??
+        row?.price ??
+        row?.decimal_odds
+      )
+    }))
+    .filter(row =>
+      row.odds !== null &&
+      row.odds > 1
+    );
 
   if (!valid.length) return null;
 
@@ -1244,280 +779,625 @@ function bestQuote(rows) {
   );
 }
 
-function marketProb(
-  prediction,
-  key
-) {
-  if (key === "HOME") return prediction.home;
-  if (key === "DRAW") return prediction.draw;
-  if (key === "AWAY") return prediction.away;
+function extractOdds(data) {
+  const out = {
+    HOME: [],
+    DRAW: [],
+    AWAY: [],
+    OVER15: [],
+    UNDER15: [],
+    OVER25: [],
+    UNDER25: [],
+    UNDER35: [],
+    BTTS_YES: [],
+    BTTS_NO: []
+  };
 
-  if (key === "DC1X") {
-    return (
-      (prediction.home ?? 0) +
-      (prediction.draw ?? 0)
+  const nested =
+    firstObject(
+      data?.odds,
+      data?.data?.odds
     );
+
+  if (nested) {
+    const mw = nested.match_winner ?? {};
+
+    if (num(mw.home) !== null) {
+      out.HOME.push({
+        odds: num(mw.home),
+        previousOdds: num(
+          mw.previous_home ??
+          mw.home_previous
+        )
+      });
+    }
+
+    if (num(mw.draw) !== null) {
+      out.DRAW.push({
+        odds: num(mw.draw),
+        previousOdds: num(
+          mw.previous_draw ??
+          mw.draw_previous
+        )
+      });
+    }
+
+    if (num(mw.away) !== null) {
+      out.AWAY.push({
+        odds: num(mw.away),
+        previousOdds: num(
+          mw.previous_away ??
+          mw.away_previous
+        )
+      });
+    }
+
+    const ou = nested.over_under ?? {};
+
+    const pushNested = (key, value) => {
+      if (num(value) !== null) {
+        out[key].push({
+          odds: num(value)
+        });
+      }
+    };
+
+    pushNested("OVER15", ou.over_15);
+    pushNested("UNDER15", ou.under_15);
+    pushNested("OVER25", ou.over_25);
+    pushNested("UNDER25", ou.under_25);
+    pushNested("UNDER35", ou.under_35);
+
+    const btts = nested.btts ?? {};
+
+    pushNested("BTTS_YES", btts.yes);
+    pushNested("BTTS_NO", btts.no);
   }
 
-  if (key === "DCX2") {
-    return (
-      (prediction.draw ?? 0) +
-      (prediction.away ?? 0)
+  for (const row of collection(data)) {
+    const key = marketKey(
+      row?.market ??
+      row?.market_code ??
+      row?.market_type,
+      row?.line,
+      row?.selection
     );
+
+    if (!key || !out[key]) continue;
+
+    const odds = num(
+      row?.odds ??
+      row?.price ??
+      row?.decimal_odds
+    );
+
+    if (odds === null || odds <= 1) continue;
+
+    out[key].push({
+      odds,
+      previousOdds: num(
+        row?.previousOdds ??
+        row?.previousPrice ??
+        row?.previous_price ??
+        row?.previous_decimal_odds
+      )
+    });
   }
 
-  if (key === "OVER15") return prediction.over15;
-  if (key === "OVER25") return prediction.over25;
-  if (key === "UNDER25") return prediction.under25;
-  if (key === "UNDER35") return prediction.under35;
-  if (key === "BTTS_YES") return prediction.btts;
-  if (key === "BTTS_NO") return prediction.bttsNo;
-
-  return null;
+  return out;
 }
 
 function womKey(row) {
-  if (!row || typeof row !== "object") {
-    return null;
-  }
+  const raw = String(
+    row?.market ??
+    row?.market_code ??
+    row?.market_type ??
+    ""
+  )
+    .toUpperCase()
+    .trim();
+
+  const code = norm(raw).replace(/\./g, "");
+
+  if (/^1X2HOME/.test(code)) return "HOME";
+  if (/^1X2DRAW/.test(code)) return "DRAW";
+  if (/^1X2AWAY/.test(code)) return "AWAY";
+
+  if (/^OU15OVER/.test(code)) return "OVER15";
+  if (/^OU15UNDER/.test(code)) return "UNDER15";
+
+  if (/^OU25OVER/.test(code)) return "OVER25";
+  if (/^OU25UNDER/.test(code)) return "UNDER25";
+
+  if (/^OU35UNDER/.test(code)) return "UNDER35";
+
+  if (/^BTTSYES/.test(code)) return "BTTS_YES";
+  if (/^BTTSNO/.test(code)) return "BTTS_NO";
 
   return marketKey(
-    row.market ??
-      row.market_code ??
-      row.kind ??
-      row.type,
-    row.line ??
-      row.market_line,
-    row.selection ??
-      row.outcome ??
-      row.outcome_name ??
-      row.name
+    raw,
+    row?.line,
+    row?.selection
   );
 }
 
-function findWom(
-  exchange,
-  key
-) {
-  if (
-    !exchange ||
-    !exchange.connected
-  ) {
+function normalizeWomData(data) {
+  const source =
+    collection(data).length
+      ? collection(data)
+      : arr(data?.money).length
+        ? data.money
+        : arr(data?.markets).length
+          ? data.markets
+          : [];
+
+  return source
+    .map(row => ({
+      ...row,
+      market:
+        row?.market ??
+        row?.market_code ??
+        row?.market_type ??
+        null,
+
+      volume: num(
+        row?.volume ??
+        row?.money ??
+        row?.turnover
+      ),
+
+      share: num(
+        row?.share ??
+        row?.money_share
+      ),
+
+      price: num(
+        row?.price ??
+        row?.odds ??
+        row?.decimal_odds
+      ),
+
+      previous_price: num(
+        row?.previous_price ??
+        row?.previousPrice ??
+        row?.previous_odds
+      ),
+
+      implied_probability: num(
+        row?.implied_probability ??
+        row?.impliedProbability
+      ),
+
+      divergence: num(
+        row?.divergence
+      ),
+
+      capturedAt:
+        row?.captured_at ??
+        row?.capturedAt ??
+        null
+    }))
+    .filter(row => row.market);
+}
+
+async function getWom(eventId) {
+  if (!USE_WOM) {
     return {
-      usable: false,
-      status: "NOT_CONNECTED"
+      connected: false,
+      status: "DISABLED",
+      markets: []
     };
   }
 
-  const rows = arr(
-    exchange.markets
-  ).filter(
-    row =>
-      womKey(row) === key
+  const key = `wom:${eventId}`;
+  const cached = cacheGet(key);
+
+  if (cached) return cached;
+
+  const data = await safe(
+    `/events/${encodeURIComponent(eventId)}/`,
+    { wom: true }
   );
 
-  if (!rows.length) {
+  if (!data) {
+    return cacheSet(key, {
+      connected: false,
+      status: "NOT_CONNECTED",
+      markets: []
+    });
+  }
+
+  return cacheSet(key, {
+    connected: true,
+    status: "CONNECTED",
+    markets: normalizeWomData(data)
+  });
+}
+
+function findWom(wom, key) {
+  if (!wom?.connected) {
+    return {
+      usable: false,
+      status: wom?.status || "NOT_CONNECTED"
+    };
+  }
+
+  const row = arr(wom.markets)
+    .find(x => womKey(x) === key);
+
+  if (!row) {
     return {
       usable: false,
       status: "NO_MARKET"
     };
   }
 
-  const row = rows.reduce(
-    (best, current) =>
-      !best ||
-      num(current.volume) >
-        num(best.volume)
-        ? current
-        : best,
-    null
-  );
-
   const volume = num(row.volume);
+  const share = num(row.share);
+  const impliedProbability = num(
+    row.impliedProbability ??
+    row.implied_probability
+  );
 
   if (
     volume === null ||
-    volume < WOM_MIN_VOLUME
+    share === null ||
+    impliedProbability === null
   ) {
     return {
       usable: false,
-      status: "LOW_VOLUME",
-      row
+      status: "INCOMPLETE"
     };
   }
 
+  if (volume < WOM_MIN_VOLUME) {
+    return {
+      usable: false,
+      status: "LOW_VOLUME",
+      volume,
+      share,
+      impliedProbability
+    };
+  }
+
+  const divergence =
+    num(row.divergence) ??
+    (share - impliedProbability);
+
   return {
     usable: true,
-    status: "OK",
+    status: "USED",
     volume,
-    share: num(row.share),
+    share,
+    impliedProbability,
+    divergence: Number(
+      divergence.toFixed(2)
+    ),
     price: num(row.price),
-    previousPrice:
-      num(row.previousPrice),
-    impliedProbability:
-      num(row.impliedProbability),
-    divergence:
-      num(row.divergence),
-    priceMovement:
-      normalizeMovement(
-        null,
-        row.price,
-        row.previousPrice
-      ),
-    row
+    previousPrice: num(
+      row.previous_price ??
+      row.previousPrice
+    ),
+    priceMovement: normalizeMovement(
+      null,
+      row.price,
+      row.previous_price ??
+      row.previousPrice
+    ),
+    capturedAt:
+      row.capturedAt ??
+      row.captured_at ??
+      null
   };
 }
 
+function normalizeMovement(
+  movement,
+  current,
+  previous
+) {
+  if (movement) return movement;
+
+  const c = num(current);
+  const p = num(previous);
+
+  if (c === null || p === null) {
+    return "UNKNOWN";
+  }
+
+  if (c < p) return "SHORTENING";
+  if (c > p) return "DRIFTING";
+
+  return "STABLE";
+}
+
+function exchangeScoreBonus(exchange) {
+  if (!exchange?.usable) return 0;
+
+  let bonus = 0;
+
+  if (exchange.divergence >= 20) bonus += 8;
+  else if (exchange.divergence >= 10) bonus += 5;
+  else if (exchange.divergence >= 5) bonus += 3;
+
+  if (
+    exchange.priceMovement === "SHORTENING"
+  ) {
+    bonus += 4;
+  }
+
+  if (
+    exchange.priceMovement === "DRIFTING"
+  ) {
+    bonus -= 5;
+  }
+
+  return clamp(bonus, -10, 12);
+}
+
+function summarizeLineups(data) {
+  const home =
+    firstObject(
+      data?.home,
+      data?.home_team,
+      data?.homeTeam
+    );
+
+  const away =
+    firstObject(
+      data?.away,
+      data?.away_team,
+      data?.awayTeam
+    );
+
+  const confirmed =
+    Boolean(
+      home?.confirmed ||
+      away?.confirmed ||
+      data?.confirmed
+    );
+
+  return {
+    quality: confirmed
+      ? "CONFIRMED"
+      : "UNKNOWN",
+
+    home: home || null,
+    away: away || null
+  };
+}
+
+function summarizeForm(data, teamId) {
+  const rows = collection(data)
+    .filter(row => {
+      const h = num(
+        row?.home_team?.id ??
+        row?.homeTeam?.id ??
+        row?.home_team_id
+      );
+
+      const a = num(
+        row?.away_team?.id ??
+        row?.awayTeam?.id ??
+        row?.away_team_id
+      );
+
+      return h === teamId || a === teamId;
+    });
+
+  let points = 0;
+  let goalsFor = 0;
+  let goalsAgainst = 0;
+
+  for (const row of rows) {
+    const homeId = num(
+      row?.home_team?.id ??
+      row?.homeTeam?.id ??
+      row?.home_team_id
+    );
+
+    const homeGoals = num(
+      row?.score?.home ??
+      row?.home_score ??
+      row?.homeGoals
+    );
+
+    const awayGoals = num(
+      row?.score?.away ??
+      row?.away_score ??
+      row?.awayGoals
+    );
+
+    if (
+      homeGoals === null ||
+      awayGoals === null
+    ) {
+      continue;
+    }
+
+    const isHome = homeId === teamId;
+
+    const gf = isHome
+      ? homeGoals
+      : awayGoals;
+
+    const ga = isHome
+      ? awayGoals
+      : homeGoals;
+
+    goalsFor += gf;
+    goalsAgainst += ga;
+
+    if (gf > ga) points += 3;
+    else if (gf === ga) points += 1;
+  }
+
+  return {
+    matches: rows.length,
+    points,
+    goalsFor,
+    goalsAgainst,
+    goalDifference: goalsFor - goalsAgainst,
+    ppg: rows.length
+      ? Number(
+          (points / rows.length).toFixed(2)
+        )
+      : 0
+  };
+}
+
+function marketProb(prediction, key) {
+  if (!prediction) return null;
+
+  switch (key) {
+    case "HOME":
+      return prediction.home;
+
+    case "DRAW":
+      return prediction.draw;
+
+    case "AWAY":
+      return prediction.away;
+
+    case "OVER15":
+      return prediction.over15;
+
+    case "OVER25":
+      return prediction.over25;
+
+    case "UNDER25":
+      return prediction.under25;
+
+    case "UNDER35":
+      return prediction.under35;
+
+    case "BTTS_YES":
+      return prediction.btts;
+
+    case "BTTS_NO":
+      return prediction.bttsNo;
+
+    case "DC1X":
+      return prediction.home !== null &&
+        prediction.draw !== null
+        ? prediction.home + prediction.draw
+        : null;
+
+    case "DCX2":
+      return prediction.draw !== null &&
+        prediction.away !== null
+        ? prediction.draw + prediction.away
+        : null;
+
+    case "DC12":
+      return prediction.home !== null &&
+        prediction.away !== null
+        ? prediction.home + prediction.away
+        : null;
+
+    default:
+      return null;
+  }
+}
+
 function score(candidate) {
+  const probability = num(candidate.probability, 0);
+  const candidateEdge = num(candidate.edge, 0);
+  const confidence = num(
+    candidate.confidence,
+    50
+  );
+
   let value = 0;
 
-  value += clamp(
-    (candidate.probability - 50) *
-      0.8,
-    0,
-    35
-  );
-
-  value += clamp(
-    candidate.edge * 1.5,
-    0,
-    25
-  );
+  value += probability * 0.55;
+  value += clamp(candidateEdge, -20, 20) * 1.2;
+  value += clamp(confidence, 0, 100) * 0.15;
 
   if (
     candidate.marketMovement?.movement ===
     "SHORTENING"
   ) {
-    value += 10;
-  }
-
-  if (
-    candidate.marketMovement?.movement ===
-    "STABLE"
-  ) {
     value += 4;
   }
 
   if (
-    candidate.context?.lineupQuality ===
-    "CONFIRMED"
+    candidate.marketMovement?.movement ===
+    "DRIFTING"
   ) {
-    value += 6;
+    value -= 8;
   }
 
-  if (
-    candidate.context?.statsSignal ===
-      "SUPPORTS" ||
-    candidate.context?.h2hSignal ===
-      "SUPPORTS"
-  ) {
-    value += 5;
-  }
+  value += exchangeScoreBonus(
+    candidate.exchange
+  );
 
-  if (
-    candidate.exchange?.usable
-  ) {
-    value += clamp(
-      Math.abs(
-        candidate.exchange.divergence ??
-          0
-      ) * 0.15,
-      0,
-      10
-    );
-
-    if (
-      candidate.exchange.priceMovement ===
-      "SHORTENING"
-    ) {
-      value += 5;
-    }
-  }
-
-  return Math.round(
-    clamp(value, 0, 100) *
-      100
-  ) / 100;
+  return Number(
+    clamp(value, 0, 100).toFixed(2)
+  );
 }
 
-function candidates(
-  prediction,
-  markets,
-  exchange
-) {
+function candidates(prediction, odds, wom) {
+  const definitions = [
+    ["HOME", "1"],
+    ["DRAW", "X"],
+    ["AWAY", "2"],
+    ["OVER15", "Over 1.5"],
+    ["OVER25", "Over 2.5"],
+    ["UNDER25", "Under 2.5"],
+    ["UNDER35", "Under 3.5"],
+    ["BTTS_YES", "BTTS Yes"],
+    ["BTTS_NO", "BTTS No"]
+  ];
+
   const output = [];
 
-  for (const key of Object.keys(markets)) {
-    if (
-      ![
-        "HOME",
-        "DRAW",
-        "AWAY",
-        "OVER15",
-        "OVER25",
-        "UNDER25",
-        "UNDER35",
-        "BTTS_YES",
-        "BTTS_NO",
-        "DC1X",
-        "DCX2"
-      ].includes(key)
-    ) {
-      continue;
-    }
+  for (const [key, label] of definitions) {
+    const probability = marketProb(
+      prediction,
+      key
+    );
 
-    const probability =
-      marketProb(
-        prediction,
-        key
-      );
+    if (probability === null) continue;
 
-    if (
-      probability === null
-    ) {
-      continue;
-    }
-
-    const quote =
-      bestQuote(
-        markets[key]
-      );
+    const quote = bestQuote(
+      odds?.[key]
+    );
 
     if (!quote) continue;
 
+    const candidateEdge = edge(
+      probability,
+      quote.odds
+    );
+
+    if (candidateEdge === null) continue;
+
     const marketMovement =
       movementFor(
-        markets[key]
+        odds?.[key]
       );
 
-    const exchangeRow =
-      findWom(
-        exchange,
-        key
-      );
+    const exchange =
+      findWom(wom, key);
 
     const candidate = {
       key,
-      market: key,
+      label,
       probability,
       odds: quote.odds,
-      edge: edge(
-        probability,
-        quote.odds
+      edge: Number(
+        candidateEdge.toFixed(2)
       ),
-      bookmaker:
-        quote.bookmaker ??
-        null,
-      marketMovement,
-      exchange:
-        exchangeRow,
       confidence:
         prediction.confidence,
-      score: 0
+      marketMovement,
+      exchange
     };
 
-    candidate.score =
-      score(candidate);
+    candidate.score = score(
+      candidate
+    );
 
     output.push(candidate);
   }
@@ -1525,949 +1405,195 @@ function candidates(
   return output;
 }
 
-function summarizeLineups(data) {
-  if (!data || typeof data !== "object") {
-    return {
-      quality: "UNKNOWN",
-      home: null,
-      away: null
-    };
+function qualify(candidate) {
+  if (!candidate) return false;
+
+  if (
+    num(candidate.probability, 0) <
+    MIN_PROBABILITY
+  ) {
+    return false;
   }
 
-  const home =
-    data.home ??
-    data.home_team ??
-    data.homeTeam ??
-    null;
-
-  const away =
-    data.away ??
-    data.away_team ??
-    data.awayTeam ??
-    null;
-
-  const hasConfirmed =
-    Boolean(
-      home?.confirmed ||
-      away?.confirmed ||
-      data.confirmed
-    );
-
-  return {
-    quality:
-      hasConfirmed
-        ? "CONFIRMED"
-        : home || away
-          ? "AVAILABLE"
-          : "UNKNOWN",
-    home,
-    away
-  };
-}
-
-function summarizeUnavailable(data) {
-  const unavailable =
-    data?.unavailable_players ??
-    data?.unavailable ??
-    data?.absences ??
-    [];
-
-  return arr(unavailable);
-}
-
-function summarizeForm(
-  data,
-  teamId
-) {
-  const rows =
-    collection(data)
-      .filter(
-        row =>
-          String(
-            row.status ??
-            row.fixture?.status ??
-            ""
-          ).toLowerCase() ===
-          "finished"
-      )
-      .slice(0, 10);
-
-  let points = 0;
-  let goalDifference = 0;
-  let goalsFor = 0;
-  let goalsAgainst = 0;
-  const form = [];
-
-  for (const row of rows) {
-    const homeId =
-      num(
-        row.home_team?.id ??
-        row.homeTeam?.id ??
-        row.home_team_id
-      );
-
-    const awayId =
-      num(
-        row.away_team?.id ??
-        row.awayTeam?.id ??
-        row.away_team_id
-      );
-
-    const homeScore =
-      num(
-        row.score?.home ??
-        row.home_score ??
-        row.homeScore
-      );
-
-    const awayScore =
-      num(
-        row.score?.away ??
-        row.away_score ??
-        row.awayScore
-      );
-
-    if (
-      homeScore === null ||
-      awayScore === null
-    ) {
-      continue;
-    }
-
-    const isHome =
-      homeId === num(teamId);
-
-    const gf =
-      isHome
-        ? homeScore
-        : awayScore;
-
-    const ga =
-      isHome
-        ? awayScore
-        : homeScore;
-
-    const result =
-      gf > ga
-        ? "W"
-        : gf < ga
-          ? "L"
-          : "D";
-
-    points +=
-      result === "W"
-        ? 3
-        : result === "D"
-          ? 1
-          : 0;
-
-    goalDifference +=
-      gf - ga;
-
-    goalsFor += gf;
-    goalsAgainst += ga;
-
-    form.push(result);
+  if (
+    num(candidate.edge, 0) <
+    MIN_EDGE
+  ) {
+    return false;
   }
 
-  return {
-    matches: form.length,
-    form,
-    points,
-    goalDifference,
-    goalsFor,
-    goalsAgainst,
-    ppg: form.length
-      ? Number(
-          (
-            points /
-            form.length
-          ).toFixed(2)
-        )
-      : 0
-  };
+  if (
+    num(candidate.score, 0) <
+    MIN_SCORE
+  ) {
+    return false;
+  }
+
+  if (
+    candidate.marketMovement?.movement ===
+    "DRIFTING"
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
-async function getTeamForm(
-  teamId
-) {
-  if (teamId === null) {
-    return {
-      matches: 0,
-      form: [],
-      points: 0,
-      goalDifference: 0
-    };
-  }
+async function getEvents(date) {
+  const key = `events:${date}`;
+  const cached = cacheGet(key);
+
+  if (cached) return cached;
 
   const data = await safe(
-    `/teams/${encodeURIComponent(teamId)}/fixtures/?status=finished&limit=10`
+    `/events/?date=${encodeURIComponent(date)}&limit=200`
   );
 
-  return summarizeForm(
-    data,
-    teamId
-  );
-}
-
-function numericStat(
-  data,
-  keys
-) {
-  const wanted =
-    new Set(
-      keys.map(k => norm(k))
-    );
-
-  let found = null;
-
-  const walk = value => {
-    if (
-      found !== null ||
-      value === null ||
-      value === undefined
-    ) {
-      return;
-    }
-
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        walk(item);
-      }
-      return;
-    }
-
-    if (
-      typeof value !== "object"
-    ) {
-      return;
-    }
-
-    for (const [
-      k,
-      v
-    ] of Object.entries(value)) {
-      if (
-        wanted.has(norm(k)) &&
-        num(v) !== null
-      ) {
-        found = num(v);
-        return;
-      }
-
-      walk(v);
-    }
-  };
-
-  walk(data);
-
-  return found;
-}
-
-function contextSignal(
-  candidateKey,
-  homeValue,
-  awayValue
-) {
-  if (
-    homeValue === null ||
-    awayValue === null
-  ) {
-    return "NEUTRAL";
-  }
-
-  const homeFav =
-    homeValue >
-    awayValue + 0.05;
-
-  const awayFav =
-    awayValue >
-    homeValue + 0.05;
-
-  if (
-    homeFav &&
-    ["HOME", "DC1X"].includes(
-      candidateKey
-    )
-  ) {
-    return "SUPPORTS";
-  }
-
-  if (
-    awayFav &&
-    ["AWAY", "DCX2"].includes(
-      candidateKey
-    )
-  ) {
-    return "SUPPORTS";
-  }
-
-  if (
-    homeFav &&
-    ["AWAY", "DCX2"].includes(
-      candidateKey
-    )
-  ) {
-    return "CONTRADICTS";
-  }
-
-  if (
-    awayFav &&
-    ["HOME", "DC1X"].includes(
-      candidateKey
-    )
-  ) {
-    return "CONTRADICTS";
-  }
-
-  return "NEUTRAL";
-}
-
-function summarizeContextSignals(
-  candidateKey,
-  stats,
-  h2h,
-  homeForm,
-  awayForm
-) {
-  const homeXg =
-    numericStat(
-      stats,
-      [
-        "home_xg",
-        "xg_home",
-        "expected_goals_home",
-        "homeExpectedGoals"
-      ]
-    );
-
-  const awayXg =
-    numericStat(
-      stats,
-      [
-        "away_xg",
-        "xg_away",
-        "expected_goals_away",
-        "awayExpectedGoals"
-      ]
-    );
-
-  const h2hHome =
-    numericStat(
-      h2h,
-      [
-        "home_win_probability",
-        "home_win_pct",
-        "home_percentage",
-        "home_wins"
-      ]
-    );
-
-  const h2hAway =
-    numericStat(
-      h2h,
-      [
-        "away_win_probability",
-        "away_win_pct",
-        "away_percentage",
-        "away_wins"
-      ]
-    );
-
-  const statsSignal =
-    contextSignal(
-      candidateKey,
-      homeXg,
-      awayXg
-    );
-
-  const h2hSignal =
-    contextSignal(
-      candidateKey,
-      h2hHome,
-      h2hAway
-    );
-
-  return {
-    statsSignal,
-    h2hSignal
-  };
-}
-
-async function enrichEvent(event) {
-  const [
-    detail,
-    lineups,
-    stats,
-    h2h,
-    homeForm,
-    awayForm
-  ] = await Promise.all([
-    safe(`/events/${event.id}/`),
-    safe(`/events/${event.id}/lineups/`),
-    safe(`/events/${event.id}/stats/`),
-    safe(`/events/${event.id}/h2h/`),
-    getTeamForm(event.home.id),
-    getTeamForm(event.away.id)
-  ]);
-
-  const referee =
-    detail?.referee ??
-    detail?.official ??
-    event.referee ??
-    null;
-
-  const signal =
-    homeForm.points ===
-    awayForm.points
-      ? "EVEN"
-      : homeForm.points >
-          awayForm.points
-        ? "HOME"
-        : "AWAY";
-
-  return {
-    refereeKnown:
-      Boolean(referee),
-    referee,
-    lineup:
-      summarizeLineups(
-        lineups
-      ),
-    statsAvailable:
-      Boolean(stats),
-    h2hAvailable:
-      Boolean(h2h),
-    detailAvailable:
-      Boolean(detail),
-    stats,
-    h2h,
-    unavailable:
-      summarizeUnavailable(
-        detail ?? event.raw
-      ),
-    form: {
-      home: homeForm,
-      away: awayForm,
-      signal,
-      pointsGap:
-        homeForm.ppg -
-        awayForm.ppg
-    }
-  };
-}
-
-function normalizeWomData(data) {
-  const direct =
-    arr(data?.money);
-
-  if (direct.length) {
-    return direct;
-  }
-
-  const nested =
-    collection(data).flatMap(
-      event =>
-        arr(event?.money)
-    );
-
-  return nested.length
-    ? nested
-    : collection(data);
-}
-
-async function getWom(
-  eventId
-) {
-  if (!USE_WOM) {
-    return {
-      connected: false,
-      status: "NOT_CONFIGURED",
-      signalUsed: false,
-      markets: []
-    };
-  }
-
-  const data =
-    await safe(
-      `/events/${encodeURIComponent(eventId)}/`,
-      { wom: true }
-    );
-
-  if (!data) {
-    return {
-      connected: false,
-      status: "UNAVAILABLE",
-      signalUsed: false,
-      markets: []
-    };
-  }
-
-  const money =
-    normalizeWomData(data)
-      .filter(
-        x =>
-          num(x.share) !== null &&
-          num(x.price) > 1 &&
-          x.market
-      );
-
-  return {
-    connected: true,
-    status: "CONNECTED",
-    signalUsed: false,
-    eventId,
-    totalVolume:
-      num(data.total_volume),
-    markets:
-      money.map(x => ({
-        market: x.market,
-        kind: x.kind ?? null,
-        line: x.line ?? null,
-        selection:
-          x.selection ?? null,
-        volume: num(x.volume),
-        share: num(x.share),
-        marketVolume:
-          num(x.market_volume),
-        leagueAvgVolume:
-          num(x.league_avg_volume),
-        price: num(x.price),
-        previousPrice:
-          num(x.previous_price),
-        impliedProbability:
-          num(x.implied_probability) ??
-          implied(x.price),
-        divergence:
-          num(x.divergence) ??
-          (
-            num(x.share) !== null &&
-            implied(x.price) !== null
-              ? num(x.share) -
-                implied(x.price)
-              : null
-          ),
-        capturedAt:
-          x.captured_at ??
-          null
-      }))
-  };
-}
-
-async function getEvents(
-  date
-) {
-  const data =
-    await safe(
-      `/events/?date_from=${encodeURIComponent(date)}&date_to=${encodeURIComponent(date)}&status=upcoming&limit=200`
-    );
-
-  return collection(data)
+  const events = collection(data)
     .map(normalizeEvent)
     .filter(Boolean)
-    .filter(
-      e =>
-        e.status ===
-        "notstarted"
-    );
-}
-
-function mergeOdds(
-  a,
-  b
-) {
-  const merged =
-    emptyMarkets();
-
-  for (
-    const key of
-    Object.keys(merged)
-  ) {
-    const rows = [
-      ...arr(a[key]),
-      ...arr(b[key])
-    ];
-
-    const seen =
-      new Set();
-
-    merged[key] =
-      rows.filter(row => {
-        const id =
-          `${row.bookmaker || "BEST"}|${row.odds}|${row.previousOdds ?? ""}|${row.line ?? ""}`;
-
-        if (
-          seen.has(id)
-        ) {
-          return false;
-        }
-
-        seen.add(id);
-        return true;
-      });
-  }
-
-  return merged;
-}
-
-function qualify(
-  candidate
-) {
-  return (
-    candidate.probability >=
-      MIN_PROBABILITY &&
-    candidate.edge >=
-      MIN_EDGE &&
-    candidate.score >=
-      MIN_SCORE &&
-    candidate.marketMovement.movement !==
-      "DRIFTING"
-  );
-}
-
-async function analyzeEvent(
-  event,
-  predictionMap
-) {
-  const prediction =
-    predictionMap.get(
-      event.id
-    ) || null;
-
-  if (!prediction) {
-    return {
-      event,
-      status: "REJECT",
-      reason: "NO_PREDICTION"
-    };
-  }
-
-  const [
-    oddsRaw,
-    oddsFeedRaw
-  ] = await Promise.all([
-    safe(
-      `/events/${event.id}/odds/`
-    ),
-    safe(
-      `/events/${event.id}/?sport=football`,
-      { odds: true }
-    )
-  ]);
-
-  const markets =
-    mergeOdds(
-      extractOdds(
-        oddsRaw
-      ),
-      extractOdds(
-        oddsFeedRaw
+    .filter(event =>
+      ["notstarted", "live"].includes(
+        event.status
       )
     );
 
-  if (
-    !Object.values(
-      markets
-    ).some(
-      rows => rows.length
-    )
-  ) {
-    return {
-      event,
-      status: "REJECT",
-      reason: "NO_RECOGNIZED_ODDS",
-      prediction
-    };
-  }
+  return cacheSet(key, events);
+}
 
-  const exchange =
-    await getWom(
-      event.id
-    );
+async function analyzeEvent(event, predictionMap) {
+  const prediction =
+    predictionMap.get(event.id) || null;
 
-  const initial =
-    candidates(
-      prediction,
-      markets,
-      exchange
-    );
+  const oddsData = await safe(
+    `/events/${encodeURIComponent(event.id)}/odds/`,
+    { odds: true }
+  );
 
-  const qualifiedBeforeContext =
-    initial.filter(
-      qualify
+  const odds = extractOdds(
+    oddsData || {}
+  );
+
+  const wom = await getWom(
+    event.id
+  );
+
+  const picks = candidates(
+    prediction,
+    odds,
+    wom
+  )
+    .filter(qualify)
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        b.probability - a.probability
     );
 
   return {
-    event,
-    status:
-      qualifiedBeforeContext.length
-        ? "QUALIFIED"
-        : "REJECT",
-    reason:
-      qualifiedBeforeContext.length
-        ? null
-        : "NO_QUALIFIED_PICK",
+    eventId: event.id,
+    event: event.event,
+    date: event.date,
+    status: event.status,
+    league: event.league,
+    leagueId: event.leagueId,
+    seasonId: event.seasonId,
+    home: event.home,
+    away: event.away,
+    referee: event.referee,
     prediction,
-    candidates: initial,
-    qualified:
-      qualifiedBeforeContext,
-    exchange,
-    markets
+    picks,
+    odds,
+    exchange: wom
   };
 }
 
-async function scan(
-  date
-) {
-  const [
-    events,
-    predictionMap
-  ] = await Promise.all([
-    getEvents(date),
-    getPredictionMap()
-  ]);
+async function scan(date) {
+  const events = await getEvents(
+    date
+  );
 
-  const selected =
-    events
-      .sort(
-        (a, b) =>
-          (
-            dateObj(a.date)
-              ?.getTime() ??
-            Number.MAX_SAFE_INTEGER
-          ) -
-          (
-            dateObj(b.date)
-              ?.getTime() ??
-            Number.MAX_SAFE_INTEGER
-          )
-      )
-      .slice(
-        0,
-        MAX_SCAN_EVENTS
-      );
+  const predictionMap =
+    await getPredictionMap();
+
+  const preliminary = events.slice(
+    0,
+    MAX_SCAN_EVENTS
+  );
 
   const results = [];
 
   for (
-    let i = 0;
-    i < selected.length;
-    i += 5
+    const event of preliminary
   ) {
-    const batch =
-      selected.slice(
-        i,
-        i + 5
-      );
-
-    results.push(
-      ...await Promise.all(
-        batch.map(
-          e =>
-            analyzeEvent(
-              e,
-              predictionMap
-            ).catch(
-              error => ({
-                event: e,
-                status: "ERROR",
-                reason:
-                  error.code ||
-                  error.message ||
-                  "ANALYZE_ERROR"
-              })
-            )
+    try {
+      results.push(
+        await analyzeEvent(
+          event,
+          predictionMap
         )
-      )
-    );
+      );
+    } catch (e) {
+      results.push({
+        eventId: event.id,
+        event: event.event,
+        status: "ERROR",
+        error: e.code || e.message,
+        picks: []
+      });
+    }
   }
 
-  const allCandidates =
-    results.flatMap(
-      r =>
-        r.status ===
-        "QUALIFIED"
-          ? r.candidates.map(
-              c => ({
-                candidate: c,
-                result: r
-              })
-            )
-          : []
-    );
-
-  const preliminary =
-    allCandidates
-      .sort(
-        (a, b) =>
-          b.candidate.score -
-          a.candidate.score
-      )
-      .slice(
-        0,
-        ENRICH_LIMIT
-      );
-
-  for (
-    const item of
-    preliminary
-  ) {
-    const context =
-      await enrichEvent(
-        item.result.event
-      );
-
-    const signals =
-      summarizeContextSignals(
-        item.candidate.key,
-        context.stats,
-        context.h2h,
-        context.form.home,
-        context.form.away
-      );
-
-    item.candidate.context = {
-      lineupQuality:
-        context.lineup.quality,
-      refereeKnown:
-        context.refereeKnown,
-      refereeSignal:
-        "NEUTRAL",
-      statsAvailable:
-        context.statsAvailable,
-      h2hAvailable:
-        context.h2hAvailable,
-      statsSignal:
-        signals.statsSignal,
-      h2hSignal:
-        signals.h2hSignal,
-      form:
-        context.form,
-      unavailable:
-        context.unavailable
-    };
-
-    item.candidate.score =
-      score(
-        item.candidate
-      );
-
-    item.candidate.exchange =
-      findWom(
-        item.result.exchange,
-        item.candidate.key ===
-          "BTTS"
-          ? "BTTS_YES"
-          : item.candidate.key
-      );
-
-    item.candidate.context.enriched =
-      true;
-  }
-
-  const enrichedCandidates =
-    preliminary;
-
-  const picks = [];
-  const usedEvents =
-    new Set();
-
-  for (
-    const item of
-    enrichedCandidates.sort(
-      (a, b) =>
-        b.candidate.score -
-          a.candidate.score ||
-        b.candidate.probability -
-          a.candidate.probability ||
-        b.candidate.edge -
-          a.candidate.edge
+  const allPicks = results
+    .flatMap(result =>
+      arr(result.picks).map(pick => ({
+        ...pick,
+        eventId: result.eventId,
+        event: result.event,
+        date: result.date,
+        league: result.league,
+        home: result.home,
+        away: result.away
+      }))
     )
-  ) {
-    const c =
-      item.candidate;
-
-    if (!qualify(c)) {
-      continue;
-    }
-
-    const eventId =
-      String(
-        item.result.event.id
-      );
-
-    if (
-      usedEvents.has(
-        eventId
-      )
-    ) {
-      continue;
-    }
-
-    usedEvents.add(
-      eventId
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        b.probability - a.probability
     );
 
-    picks.push({
-      ...c,
-      event:
-        item.result.event,
-      exchange:
-        c.exchange ??
-        findWom(
-          item.result.exchange,
-          c.key === "BTTS"
-            ? "BTTS_YES"
-            : c.key
-        )
-    });
-
-    if (
-      picks.length >=
+  const picks =
+    allPicks.slice(
+      0,
       MAX_PICKS
-    ) {
-      break;
-    }
-  }
+    );
 
   const reasons = {};
 
-  for (
-    const result of
-    results
-  ) {
+  for (const result of results) {
     if (
-      result.status !==
-      "QUALIFIED"
+      result.status === "ERROR"
     ) {
-      reasons[
-        result.reason ||
-        "NO_QUALIFIED_PICK"
-      ] =
-        (
-          reasons[
-            result.reason ||
-            "NO_QUALIFIED_PICK"
-          ] || 0
-        ) + 1;
+      const key =
+        result.error || "ERROR";
+
+      reasons[key] =
+        (reasons[key] || 0) + 1;
     }
   }
 
   return {
+    ok: true,
     source: SOURCE,
     version: VERSION,
     date,
-    generatedAt:
-      nowIso(),
-    scannedEvents:
-      selected.length,
-    analyzedEvents:
-      results.length,
+    scannedEvents: results.length,
     predictionRecords:
       predictionMap.size,
     qualifiedEvents:
       picks.length,
     picks,
+
     diagnostics: {
       rejectedEvents:
         results.filter(
@@ -2475,17 +1601,18 @@ async function scan(
             r.status !==
             "QUALIFIED"
         ).length,
+
       reasons,
       contextAudited:
         preliminary.length
     },
+
     exchange: {
-      enabled:
-        USE_WOM,
-      status:
-        USE_WOM
-          ? "WOM_ENABLED"
-          : "NOT_CONFIGURED",
+      enabled: USE_WOM,
+      status: USE_WOM
+        ? "WOM_ENABLED"
+        : "NOT_CONFIGURED",
+
       message:
         "WOM is a separate BSD feed; when available and liquid enough, it affects scoring."
     }
@@ -2499,7 +1626,7 @@ function selfTest() {
     name,
     pass,
     details = null
-  ) =>
+  ) => {
     tests.push({
       name,
       pass: Boolean(pass),
@@ -2507,6 +1634,7 @@ function selfTest() {
         ? { details }
         : {})
     });
+  };
 
   add(
     "pct_decimal",
@@ -2528,8 +1656,7 @@ function selfTest() {
   add(
     "status_finished",
     status({
-      status:
-        "completed"
+      status: "completed"
     }) === "finished"
   );
 
@@ -2543,60 +1670,52 @@ function selfTest() {
   const event =
     normalizeEvent({
       id: 7,
-      home_team:
-        "Home FC",
-      away_team:
-        "Away FC",
-      status:
-        "upcoming"
+      home_team: "Home FC",
+      away_team: "Away FC",
+      status: "upcoming"
     });
 
   add(
     "event_string_teams",
     event?.home.name ===
       "Home FC" &&
-      event?.away.name ===
-        "Away FC"
+    event?.away.name ===
+      "Away FC"
   );
 
   add(
     "nested_collection",
     collection({
       data: {
-        results: [
-          { id: 1 }
-        ]
+        results: [{ id: 1 }]
       }
     }).length === 1
   );
 
   const prediction =
     parsePrediction({
-      event: {
-        id: 7
-      },
+      event: { id: 7 },
+
       markets: {
         match_result: {
           prob_home: 0.55,
           prob_draw: 0.25,
           prob_away: 0.20
         },
+
         over_under: {
-          prob_over_15:
-            0.72,
-          prob_under_35:
-            0.78
+          prob_over_15: 0.72,
+          prob_under_35: 0.78
         },
+
         btts: {
-          prob_yes:
-            0.51,
-          prob_no:
-            0.49
+          prob_yes: 0.51,
+          prob_no: 0.49
         }
       },
+
       model: {
-        confidence:
-          0.87
+        confidence: 0.87
       }
     });
 
@@ -2620,12 +1739,14 @@ function selfTest() {
           draw: 3.2,
           away: 3.6
         },
+
         over_under: {
           over_15: 1.28,
           over_25: 2.05,
           under_25: 1.78,
           under_35: 1.26
         },
+
         btts: {
           yes: 2,
           no: 1.8
@@ -2652,28 +1773,23 @@ function selfTest() {
         {
           market:
             "1X2_HOME_FT",
-          selection:
-            "HOME",
-          decimal_odds:
-            2.1,
-          previous_decimal_odds:
-            2.2
+          selection: "HOME",
+          decimal_odds: 2.1,
+          previous_decimal_odds: 2.2
         },
+
         {
           market:
             "OU_2.5_OVER_FT",
-          selection:
-            "OVER",
-          decimal_odds:
-            2.05
+          selection: "OVER",
+          decimal_odds: 2.05
         },
+
         {
           market:
             "BTTS_FT",
-          selection:
-            "NO",
-          decimal_odds:
-            1.9
+          selection: "NO",
+          decimal_odds: 1.9
         }
       ]
     });
@@ -2718,31 +1834,28 @@ function selfTest() {
   add(
     "wom_code_home",
     womKey({
-      market:
-        "1X2_HOME_FT"
+      market: "1X2_HOME_FT"
     }) === "HOME"
   );
 
   add(
     "wom_code_over25",
     womKey({
-      market:
-        "OU_2.5_OVER_FT"
+      market: "OU_2.5_OVER_FT"
     }) === "OVER25"
   );
 
   add(
     "wom_code_btts",
     womKey({
-      market:
-        "BTTS_YES_FT"
-    }) ===
-      "BTTS_YES"
+      market: "BTTS_YES_FT"
+    }) === "BTTS_YES"
   );
 
   const nestedWom =
     normalizeWomData({
       id: 7,
+
       money: [
         {
           market:
@@ -2750,10 +1863,8 @@ function selfTest() {
           share: 80,
           volume: 10000,
           price: 2,
-          previous_price:
-            2.1,
-          implied_probability:
-            50
+          previous_price: 2.1,
+          implied_probability: 50
         }
       ]
     });
@@ -2767,6 +1878,7 @@ function selfTest() {
 
   const lowWom = {
     connected: true,
+
     markets: [
       {
         market:
@@ -2795,6 +1907,7 @@ function selfTest() {
 
   const goodWom = {
     connected: true,
+
     markets: [
       {
         market:
@@ -2824,14 +1937,12 @@ function selfTest() {
       },
       goodWom
     ).find(
-      x =>
-        x.key === "HOME"
+      x => x.key === "HOME"
     );
 
   add(
     "wom_changes_score",
-    c?.exchange?.usable ===
-      true &&
+    c?.exchange?.usable === true &&
       c.score > 50
   );
 
@@ -2844,9 +1955,7 @@ function selfTest() {
     summarizeLineups({
       home: {
         confirmed: true,
-        players: [
-          { id: 1 }
-        ]
+        players: [{ id: 1 }]
       }
     });
 
@@ -2858,9 +1967,7 @@ function selfTest() {
 
   const form =
     summarizeForm(
-      {
-        results: []
-      },
+      { results: [] },
       1
     );
 
@@ -2890,11 +1997,14 @@ function selfTest() {
     score({
       probability: 99,
       edge: 20,
+
       marketMovement: {
         movement:
           "SHORTENING"
       },
+
       confidence: 99,
+
       exchange: {
         usable: true,
         divergence: 30,
@@ -2936,32 +2046,39 @@ function selfTest() {
         status: "finished",
         date:
           "2026-09-25T12:00:00Z",
+
         home_team: {
           id: 1,
           name: "A"
         },
+
         away_team: {
           id: 2,
           name: "B"
         },
+
         score: {
           home: 2,
           away: 0
         }
       },
+
       {
         id: 2,
         status: "finished",
         date:
           "2026-09-20T12:00:00Z",
+
         home_team: {
           id: 3,
           name: "C"
         },
+
         away_team: {
           id: 1,
           name: "A"
         },
+
         score: {
           home: 1,
           away: 1
@@ -2991,6 +2108,7 @@ function selfTest() {
           draw: 3.2,
           away: 3.6
         },
+
         over_under: {
           over_15: 1.28,
           under_15: 3.75,
@@ -2998,6 +2116,7 @@ function selfTest() {
           under_25: 1.78,
           under_35: 1.26
         },
+
         btts: {
           yes: 2.0,
           no: 1.8
@@ -3022,25 +2141,24 @@ function selfTest() {
     normalizeEvent({
       id: 123,
       home_team_id: 10,
-      home_team:
-        "Home FC",
+      home_team: "Home FC",
       away_team_id: 20,
-      away_team:
-        "Away FC",
+      away_team: "Away FC",
       event_date:
         "2026-09-26T18:00:00Z",
-      status:
-        "notstarted"
+      status: "notstarted"
     });
 
   add(
     "bsd_event_shape",
     bsdEventShape?.date ===
-        "2026-09-26T18:00:00Z" &&
-      bsdEventShape?.home?.id === 10 &&
+      "2026-09-26T18:00:00Z" &&
+      bsdEventShape?.home?.id ===
+        10 &&
       bsdEventShape?.home?.name ===
         "Home FC" &&
-      bsdEventShape?.away?.id === 20 &&
+      bsdEventShape?.away?.id ===
+        20 &&
       bsdEventShape?.away?.name ===
         "Away FC"
   );
@@ -3056,8 +2174,7 @@ function selfTest() {
               volume: 12000,
               share: 72,
               price: 1.8,
-              previous_price:
-                1.9,
+              previous_price: 1.9,
               implied_probability:
                 55.56
             }
@@ -3079,6 +2196,7 @@ function selfTest() {
       probability: 70,
       edge: 5,
       score: 90,
+
       marketMovement: {
         movement:
           "DRIFTING"
@@ -3092,27 +2210,23 @@ function selfTest() {
       tests.filter(
         t => t.pass
       ).length,
-    total:
-      tests.length,
-    ok:
-      tests.every(
-        t => t.pass
-      ),
+    total: tests.length,
+    ok: tests.every(
+      t => t.pass
+    ),
     tests
   };
 }
 
-app.get(
-  "/",
-  (req, res) =>
-    res.json({
-      ok: true,
-      service:
-        "Bet Analyzer Backend",
-      version: VERSION,
-      source: SOURCE,
-      time: nowIso()
-    })
+app.get("/", (req, res) =>
+  res.json({
+    ok: true,
+    service:
+      "Bet Analyzer Backend",
+    version: VERSION,
+    source: SOURCE,
+    time: nowIso()
+  })
 );
 
 app.get(
@@ -3123,14 +2237,14 @@ app.get(
       version: VERSION,
       source: SOURCE,
       bsdConfigured:
-        Boolean(
-          BSD_API_KEY
-        ),
+        Boolean(BSD_API_KEY),
+
       wom: {
         enabled: USE_WOM,
         minVolume:
           WOM_MIN_VOLUME
       },
+
       time: nowIso()
     })
 );
@@ -3157,23 +2271,17 @@ app.get(
     try {
       const date =
         req.query.date ||
-        nowIso().slice(
-          0,
-          10
-        );
+        nowIso().slice(0, 10);
 
       const events =
-        await getEvents(
-          date
-        );
+        await getEvents(date);
 
       res.json({
         ok: true,
         source: SOURCE,
         version: VERSION,
         date,
-        count:
-          events.length,
+        count: events.length,
         events
       });
     } catch (e) {
@@ -3202,8 +2310,8 @@ app.get(
         ok: true,
         source: SOURCE,
         version: VERSION,
-        count:
-          map.size,
+        count: map.size,
+
         predictions:
           [
             ...map.entries()
@@ -3239,10 +2347,7 @@ app.get(
       res.json(
         await scan(
           req.query.date ||
-          nowIso().slice(
-            0,
-            10
-          )
+          nowIso().slice(0, 10)
         )
       );
     } catch (e) {
@@ -3267,9 +2372,7 @@ app.get(
   async (req, res) => {
     try {
       const id =
-        num(
-          req.params.id
-        );
+        num(req.params.id);
 
       if (id === null) {
         return res
@@ -3287,9 +2390,7 @@ app.get(
         );
 
       const event =
-        normalizeEvent(
-          raw
-        );
+        normalizeEvent(raw);
 
       if (!event) {
         return res
@@ -3308,12 +2409,10 @@ app.get(
         ok: true,
         source: SOURCE,
         version: VERSION,
-        ...(
-          await analyzeEvent(
-            event,
-            map
-          )
-        )
+        ...(await analyzeEvent(
+          event,
+          map
+        ))
       });
     } catch (e) {
       res
@@ -3334,9 +2433,7 @@ app.get(
   "/api/events/:id/odds",
   async (req, res) => {
     const id =
-      num(
-        req.params.id
-      );
+      num(req.params.id);
 
     if (id === null) {
       return res
@@ -3370,9 +2467,7 @@ app.get(
       eventId: id,
       data,
       parsed:
-        extractOdds(
-          data
-        )
+        extractOdds(data)
     });
   }
 );
@@ -3383,11 +2478,9 @@ app.use(
       .status(404)
       .json({
         ok: false,
-        error:
-          "NOT_FOUND",
+        error: "NOT_FOUND",
         path: req.path,
-        version:
-          VERSION
+        version: VERSION
       })
 );
 
@@ -3402,8 +2495,7 @@ app.use(
         error:
           err.message ||
           "INTERNAL_SERVER_ERROR",
-        version:
-          VERSION
+        version: VERSION
       });
   }
 );
