@@ -14,75 +14,60 @@ const PORT = process.env.PORT || 10000;
 const BSD_API_KEY = process.env.BSD_API_KEY;
 const BSD_BASE = "https://sports.bzzoiro.com/api/v2";
 
-const VERSION = "6.6.4";
+const VERSION = "6.6.5";
 const SOURCE = "BSD";
+
+/*
+|--------------------------------------------------------------------------
+| CONFIG
+|--------------------------------------------------------------------------
+*/
 
 const MAX_TOP_PICKS = 5;
 const MAX_EVENTS_TO_ANALYZE = 100;
 
-/*
- * 6.6.4 — selekcja typów
- *
- * Nie chcemy kursów typu 1.01–1.10.
- * Typ ma mieć sensowną relację prawdopodobieństwa do kursu.
- */
 const MIN_ODDS = 1.25;
-const MAX_ODDS = 5.5;
+const MAX_ODDS = 5.50;
 
-/*
- * Model musi mieć co najmniej takie prawdopodobieństwo.
- */
 const MIN_PROBABILITY = 50;
 
 /*
- * W 6.6.4 wymagamy dodatniej wartości względem kursu.
- *
- * valueEdge:
- * model probability - probability implied by odds
- *
- * 0% = model i kurs są dokładnie na granicy.
+ * We no longer require positive value at candidate creation.
+ * A slightly negative edge can survive into the ranking if the
+ * probability / market support is strong.
  */
-const MIN_VALUE_EDGE = 0.0;
+const MIN_CANDIDATE_VALUE_EDGE = -8.0;
 
 const REQUEST_TIMEOUT = 15000;
+const DETAIL_CONCURRENCY = 5;
 
-if (!BSD_API_KEY) {
-  console.warn("WARNING: BSD_API_KEY is not configured.");
+/*
+|--------------------------------------------------------------------------
+| BASIC HELPERS
+|--------------------------------------------------------------------------
+*/
+
+function safeNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
-/* =========================================================
-   HELPERS
-========================================================= */
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function round(value, digits = 2) {
+  if (!Number.isFinite(value)) return null;
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
 
 function normalizeText(value) {
   return String(value ?? "")
     .trim()
     .toLowerCase()
-    .replace(/[\s\-]+/g, "_");
-}
-
-function numberOrNull(value) {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-
-  const n = Number(value);
-
-  return Number.isFinite(n) ? n : null;
-}
-
-function round(value, decimals = 3) {
-  if (
-    value === null ||
-    value === undefined ||
-    !Number.isFinite(Number(value))
-  ) {
-    return null;
-  }
-
-  const factor = 10 ** decimals;
-
-  return Math.round(Number(value) * factor) / factor;
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
 }
 
 function isoDateOnly(value) {
@@ -97,97 +82,97 @@ function isoDateOnly(value) {
   return d.toISOString().slice(0, 10);
 }
 
-function getTeamName(event, side) {
-  if (!event) return null;
+function isUpcomingEvent(event) {
+  if (!event) return false;
 
-  if (side === "home") {
-    return (
-      event.home_team ||
-      event.homeTeam ||
-      event.home_name ||
-      event.home?.name ||
-      event.teams?.home?.name ||
-      null
-    );
+  const status = normalizeText(
+    event.status ||
+    event.state ||
+    event.match_status ||
+    event.event_status
+  );
+
+  if (
+    status.includes("finished") ||
+    status.includes("cancelled") ||
+    status.includes("canceled") ||
+    status.includes("postponed") ||
+    status === "live" ||
+    status === "inplay" ||
+    status === "in play"
+  ) {
+    return false;
   }
 
+  const date =
+    event.date ||
+    event.event_date ||
+    event.start_time ||
+    event.start_at ||
+    event.kickoff_at ||
+    event.start;
+
+  if (!date) return false;
+
+  const timestamp = new Date(date).getTime();
+
+  if (!Number.isFinite(timestamp)) return false;
+
+  return timestamp > Date.now();
+}
+
+function getEventId(event) {
+  return safeNumber(
+    event?.id ??
+    event?.event_id ??
+    event?.match_id
+  );
+}
+
+function getHomeName(event) {
   return (
-    event.away_team ||
-    event.awayTeam ||
-    event.away_name ||
-    event.away?.name ||
-    event.teams?.away?.name ||
+    event?.home?.name ||
+    event?.home_team?.name ||
+    event?.home?.team?.name ||
+    event?.home_name ||
+    event?.homeTeam?.name ||
+    "Home"
+  );
+}
+
+function getAwayName(event) {
+  return (
+    event?.away?.name ||
+    event?.away_team?.name ||
+    event?.away?.team?.name ||
+    event?.away_name ||
+    event?.awayTeam?.name ||
+    "Away"
+  );
+}
+
+function getEventDate(event) {
+  return (
+    event?.date ||
+    event?.event_date ||
+    event?.start_time ||
+    event?.start_at ||
+    event?.kickoff_at ||
+    event?.start ||
     null
   );
 }
 
-function isUpcomingEvent(event, requestedDate = null) {
-  if (!event) return false;
-
-  const status = normalizeText(event.status);
-
-  const badStatuses = new Set([
-    "finished",
-    "completed",
-    "cancelled",
-    "canceled",
-    "postponed",
-    "abandoned",
-    "live",
-    "in_play",
-    "inplay",
-    "halftime",
-    "ht"
-  ]);
-
-  if (badStatuses.has(status)) {
-    return false;
-  }
-
-  if (requestedDate) {
-    const eventDate = isoDateOnly(
-      event.event_date ||
-      event.date ||
-      event.start_time ||
-      event.start_at
-    );
-
-    if (eventDate && eventDate !== requestedDate) {
-      return false;
-    }
-  }
-
-  const eventTime =
-    event.event_date ||
-    event.date ||
-    event.start_time ||
-    event.start_at;
-
-  if (eventTime) {
-    const timestamp = new Date(eventTime).getTime();
-
-    if (Number.isFinite(timestamp)) {
-      if (timestamp < Date.now() - 5 * 60 * 1000) {
-        return false;
-      }
-    }
-  }
-
-  return true;
-}
-
-/* =========================================================
-   BSD API
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| BSD FETCH
+|--------------------------------------------------------------------------
+*/
 
 async function bsdFetch(path) {
   if (!BSD_API_KEY) {
     throw new Error("BSD_API_KEY is missing");
   }
-
-  const url = /^https?:\/\//i.test(path)
-    ? path
-    : `${BSD_BASE}${path.startsWith("/") ? path : `/${path}`}`;
 
   const controller = new AbortController();
 
@@ -196,7 +181,7 @@ async function bsdFetch(path) {
   }, REQUEST_TIMEOUT);
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(`${BSD_BASE}${path}`, {
       method: "GET",
       headers: {
         Authorization: `Token ${BSD_API_KEY}`,
@@ -207,22 +192,24 @@ async function bsdFetch(path) {
 
     const text = await response.text();
 
-    let data;
+    let data = null;
 
     try {
       data = text ? JSON.parse(text) : null;
     } catch {
-      data = text;
+      data = null;
     }
 
     if (!response.ok) {
-      const error = new Error(
-        `BSD ${response.status} ${response.statusText}`
-      );
+      const message =
+        data?.detail ||
+        data?.message ||
+        text?.slice(0, 300) ||
+        `BSD ${response.status}`;
 
+      const error = new Error(`BSD ${response.status} ${message}`);
       error.status = response.status;
       error.data = data;
-
       throw error;
     }
 
@@ -235,51 +222,11 @@ async function bsdFetch(path) {
   }
 }
 
-/* =========================================================
-   PAGINATION
-========================================================= */
-
-function extractRows(data) {
-  if (!data) return [];
-
-  if (Array.isArray(data)) {
-    return data;
-  }
-
-  if (Array.isArray(data.results)) {
-    return data.results;
-  }
-
-  if (Array.isArray(data.data)) {
-    return data.data;
-  }
-
-  if (Array.isArray(data.items)) {
-    return data.items;
-  }
-
-  return [];
-}
-
-function extractCount(data) {
-  if (!data || typeof data !== "object") {
-    return null;
-  }
-
-  return (
-    numberOrNull(data.count) ??
-    numberOrNull(data.total) ??
-    numberOrNull(data.total_count)
-  );
-}
-
-function extractNext(data) {
-  if (!data || typeof data !== "object") {
-    return null;
-  }
-
-  return data.next || null;
-}
+/*
+|--------------------------------------------------------------------------
+| PAGINATION
+|--------------------------------------------------------------------------
+*/
 
 async function fetchAllPages(
   path,
@@ -289,7 +236,7 @@ async function fetchAllPages(
     diagnostics = null
   } = {}
 ) {
-  const allRows = [];
+  const all = [];
 
   let offset = 0;
 
@@ -302,48 +249,47 @@ async function fetchAllPages(
     try {
       const response = await bsdFetch(requestPath);
 
-      const data = response.data;
+      const data = response.data || {};
 
-      const rows = extractRows(data);
+      const rows = Array.isArray(data)
+        ? data
+        : Array.isArray(data.results)
+          ? data.results
+          : Array.isArray(data.data)
+            ? data.data
+            : [];
 
-      const total = extractCount(data);
+      const count = safeNumber(data.count) ?? rows.length;
 
-      const next = extractNext(data);
+      all.push(...rows);
 
       if (diagnostics) {
         diagnostics.push({
           path: requestPath,
           status: response.status,
-          count: total,
+          count,
           rows: rows.length,
-          hasNext: Boolean(next)
+          hasNext: Boolean(data.next)
         });
       }
 
-      allRows.push(...rows);
-
-      if (rows.length === 0) {
-        break;
-      }
-
       if (
-        total !== null &&
-        allRows.length >= total
+        rows.length === 0 ||
+        !data.next ||
+        all.length >= count
       ) {
         break;
       }
 
-      if (!next && rows.length < limit) {
-        break;
-      }
-
-      offset += rows.length;
+      offset += limit;
     } catch (error) {
       if (diagnostics) {
         diagnostics.push({
           path: requestPath,
-          status: error.status || null,
-          error: error.message
+          status: error.status || 500,
+          error: String(error.message || error)
+            .replace(/\s+/g, " ")
+            .slice(0, 250)
         });
       }
 
@@ -351,59 +297,69 @@ async function fetchAllPages(
     }
   }
 
-  return allRows;
+  return all;
 }
 
-/* =========================================================
-   EVENTS
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| EVENTS
+|--------------------------------------------------------------------------
+*/
 
-async function getEventsForDate(
-  date,
-  diagnostics = []
-) {
-  const paths = [
+async function getEventsForDate(date, diagnostics) {
+  const attempts = [
     `/events/?date=${encodeURIComponent(date)}`,
-    `/events/?event_date=${encodeURIComponent(date)}`,
-    `/events/?from_date=${encodeURIComponent(date)}&to_date=${encodeURIComponent(date)}`
+    `/events/?date_from=${encodeURIComponent(date)}&date_to=${encodeURIComponent(date)}`
   ];
 
-  let bestRows = [];
+  let best = [];
 
-  for (const path of paths) {
+  for (const path of attempts) {
     const localDiagnostics = [];
 
-    const rows = await fetchAllPages(
-      path,
-      {
-        limit: 200,
-        maxPages: 10,
-        diagnostics: localDiagnostics
-      }
-    );
+    const rows = await fetchAllPages(path, {
+      limit: 200,
+      maxPages: 5,
+      diagnostics: localDiagnostics
+    });
 
-    diagnostics.push(...localDiagnostics);
+    if (diagnostics) {
+      diagnostics.push(...localDiagnostics);
+    }
 
-    if (rows.length > bestRows.length) {
-      bestRows = rows;
+    if (rows.length > best.length) {
+      best = rows;
     }
   }
 
-  return bestRows;
+  return best;
 }
 
-/* =========================================================
-   PREDICTIONS
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| PREDICTIONS
+|--------------------------------------------------------------------------
+*/
 
 function parsePredictionRow(row) {
-  if (!row || typeof row !== "object") {
-    return null;
-  }
+  if (!row) return null;
 
-  const event = row.event || {};
+  const eventId = safeNumber(
+    row.event_id ??
+    row.eventId ??
+    row.match_id ??
+    row.matchId ??
+    row.event?.id ??
+    row.match?.id
+  );
 
-  const markets = row.markets || {};
+  if (!eventId) return null;
+
+  const markets =
+    row.markets ||
+    row.prediction?.markets ||
+    row.data?.markets ||
+    {};
 
   const matchResult =
     markets.match_result ||
@@ -415,13 +371,12 @@ function parsePredictionRow(row) {
   const overUnder =
     markets.over_under ||
     markets.overUnder ||
-    markets.totals ||
     row.over_under ||
+    row.overUnder ||
     {};
 
   const btts =
     markets.btts ||
-    markets.BTTS ||
     row.btts ||
     {};
 
@@ -434,1244 +389,1180 @@ function parsePredictionRow(row) {
     markets.draw_no_bet ||
     markets.drawNoBet ||
     row.draw_no_bet ||
+    row.drawNoBet ||
     {};
 
-  const home = numberOrNull(
+  const home = safeNumber(
     matchResult.prob_home ??
     matchResult.home ??
-    row.prob_home
+    row.prob_home ??
+    row.home_probability ??
+    row.home_prob
   );
 
-  const draw = numberOrNull(
+  const draw = safeNumber(
     matchResult.prob_draw ??
     matchResult.draw ??
-    row.prob_draw
+    row.prob_draw ??
+    row.draw_probability ??
+    row.draw_prob
   );
 
-  const away = numberOrNull(
+  const away = safeNumber(
     matchResult.prob_away ??
     matchResult.away ??
-    row.prob_away
+    row.prob_away ??
+    row.away_probability ??
+    row.away_prob
   );
 
-  const over15 = numberOrNull(
+  const over15 = safeNumber(
     overUnder.prob_over_15 ??
     overUnder.over_15 ??
-    overUnder.over15 ??
     row.prob_over_15
   );
 
-  const over25 = numberOrNull(
+  const over25 = safeNumber(
     overUnder.prob_over_25 ??
     overUnder.over_25 ??
-    overUnder.over25 ??
     row.prob_over_25
   );
 
-  const over35 = numberOrNull(
+  const over35 = safeNumber(
     overUnder.prob_over_35 ??
     overUnder.over_35 ??
-    overUnder.over35 ??
     row.prob_over_35
   );
 
-  const bttsYes = numberOrNull(
+  const bttsYes = safeNumber(
     btts.prob_yes ??
     btts.yes ??
     row.prob_btts_yes
   );
 
-  const dnbHome = numberOrNull(
+  const dnbHome = safeNumber(
     drawNoBet.prob_home ??
     drawNoBet.home ??
     row.prob_dnb_home
   );
 
-  const confidence = numberOrNull(
+  const confidence = safeNumber(
     row.model?.confidence ??
+    row.prediction?.confidence ??
     row.confidence
   );
 
+  const mostLikelyScore =
+    score.most_likely ??
+    score.mostLikely ??
+    row.most_likely_score ??
+    row.score_prediction ??
+    null;
+
   return {
-    eventId:
-      Number(
-        event.id ??
-        row.event_id ??
-        row.eventId ??
-        0
-      ) || null,
-
-    event,
-
+    eventId,
     home,
     draw,
     away,
-
     over15,
     over25,
     over35,
-
     bttsYes,
     dnbHome,
-
-    mostLikelyScore:
-      score.most_likely ??
-      score.mostLikely ??
-      row.most_likely_score ??
-      null,
-
-    predicted:
-      matchResult.predicted ??
-      row.predicted ??
-      null,
-
-    confidence,
-
-    raw: row
+    score: mostLikelyScore,
+    confidence
   };
 }
 
-async function getAllPredictions(
-  diagnostics = []
-) {
-  return fetchAllPages(
-    "/predictions/",
-    {
-      limit: 200,
-      maxPages: 10,
-      diagnostics
-    }
-  );
+async function getAllPredictions(diagnostics) {
+  const rows = await fetchAllPages("/predictions/", {
+    limit: 200,
+    maxPages: 20,
+    diagnostics
+  });
+
+  const map = new Map();
+
+  for (const row of rows) {
+    const parsed = parsePredictionRow(row);
+
+    if (!parsed) continue;
+
+    map.set(parsed.eventId, parsed);
+  }
+
+  return {
+    map,
+    total: rows.length,
+    parsed: map.size
+  };
 }
 
-/* =========================================================
-   ODDS
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| ODDS PARSING
+|--------------------------------------------------------------------------
+*/
 
 function normalizeMarket(row) {
   return normalizeText(
-    row.market ??
-    row.market_name ??
-    row.market_slug ??
-    row.market_code ??
+    row?.market ??
+    row?.market_name ??
+    row?.market_slug ??
+    row?.market_code ??
+    row?.market_kind ??
+    row?.market_family ??
     ""
   );
 }
 
 function normalizeOutcome(row) {
   return normalizeText(
-    row.outcome ??
-    row.outcome_name ??
-    row.selection ??
-    row.name ??
+    row?.outcome ??
+    row?.outcome_name ??
+    row?.selection ??
+    row?.name ??
+    row?.outcome_code ??
     ""
   );
 }
 
-function parseLine(row) {
-  return numberOrNull(
-    row.line ??
-    row.total ??
-    row.handicap ??
-    row.points ??
-    row.goal_line ??
-    row.threshold
+function getLine(row) {
+  return safeNumber(
+    row?.line ??
+    row?.total ??
+    row?.handicap ??
+    row?.points ??
+    row?.goal_line ??
+    row?.threshold
   );
 }
 
-function parseOddsRow(row) {
-  if (!row || typeof row !== "object") {
-    return null;
-  }
+function getOddsValue(row) {
+  return safeNumber(
+    row?.decimal_odds ??
+    row?.odds ??
+    row?.price ??
+    row?.value
+  );
+}
 
+function getPreviousOdds(row) {
+  return safeNumber(
+    row?.previous_decimal_odds ??
+    row?.previous_odds ??
+    row?.previous_price
+  );
+}
+
+function getOpeningOdds(row) {
+  return safeNumber(
+    row?.opening_decimal_odds ??
+    row?.opening_odds ??
+    row?.opening_price
+  );
+}
+
+function getBookmakerCount(row) {
+  return safeNumber(
+    row?.bookmaker_count ??
+    row?.bookmakers_count ??
+    row?.books_count ??
+    row?.market_bookmaker_count
+  );
+}
+
+function getUpdatedAt(row) {
+  return (
+    row?.updated_at ||
+    row?.timestamp ||
+    row?.last_updated ||
+    row?.created_at ||
+    null
+  );
+}
+
+function classifyOddsRow(row) {
   const market = normalizeMarket(row);
   const outcome = normalizeOutcome(row);
+  const line = getLine(row);
 
-  const odds = numberOrNull(
-    row.decimal_odds ??
-    row.odds ??
-    row.price ??
-    row.decimalOdds
-  );
+  const odds = getOddsValue(row);
 
-  if (
-    !Number.isFinite(odds) ||
-    odds <= 1
-  ) {
-    return null;
-  }
+  if (!odds || odds <= 1) return null;
 
-  const previousOdds = numberOrNull(
-    row.previous_decimal_odds ??
-    row.previous_odds ??
-    row.previousDecimalOdds
-  );
+  const is1x2 =
+    market.includes("1x2") ||
+    market.includes("match result") ||
+    market.includes("match winner") ||
+    market === "winner" ||
+    market === "moneyline";
 
-  const openingOdds = numberOrNull(
-    row.opening_decimal_odds ??
-    row.opening_odds ??
-    row.openingDecimalOdds
-  );
+  const isDoubleChance =
+    market.includes("double chance") ||
+    market.includes("double_chance") ||
+    market.includes("doublechance");
 
-  const movement =
-    String(row.movement ?? "")
-      .trim()
-      .toUpperCase() || null;
+  const isOverUnder =
+    market.includes("over under") ||
+    market.includes("over/under") ||
+    market.includes("total goals") ||
+    market.includes("totals") ||
+    market.includes("goals");
 
-  const bookmakerCount = numberOrNull(
-    row.bookmaker_count ??
-    row.bookmakers_count ??
-    row.bookmakerCount
-  );
+  const isBTTS =
+    market.includes("btts") ||
+    market.includes("both teams");
 
-  return {
-    id: row.id ?? null,
-
-    eventId:
-      Number(
-        row.event_id ??
-        row.eventId ??
-        0
-      ) || null,
-
-    market,
-    outcome,
-
-    line: parseLine(row),
-
-    odds,
-    previousOdds,
-    openingOdds,
-
-    movement,
-
-    bookmaker:
-      row.bookmaker_name ??
-      row.bookmaker_slug ??
-      null,
-
-    bookmakerCount,
-
-    updatedAt:
-      row.updated_at ??
-      row.updatedAt ??
-      null,
-
-    raw: row
-  };
-}
-
-function marketIs(row, values) {
-  const market = row.market || "";
-
-  return values.some(
-    (value) =>
-      market === value ||
-      market.includes(value) ||
-      value.includes(market)
-  );
-}
-
-function outcomeIs(row, values) {
-  const outcome = row.outcome || "";
-
-  return values.some(
-    (value) =>
-      outcome === value ||
-      outcome.includes(value) ||
-      value.includes(outcome)
-  );
-}
-
-function selectLatestOdds(rows) {
-  const map = new Map();
-
-  for (const row of rows) {
-    if (!row) continue;
-
-    const key = [
-      row.market,
-      row.outcome,
-      row.line ?? ""
-    ].join("|");
-
-    const existing = map.get(key);
-
-    if (!existing) {
-      map.set(key, row);
-      continue;
+  if (is1x2) {
+    if (
+      outcome === "home" ||
+      outcome === "1" ||
+      outcome.includes("home")
+    ) {
+      return {
+        type: "HOME",
+        odds,
+        line,
+        bookmakerCount: getBookmakerCount(row),
+        previousOdds: getPreviousOdds(row),
+        openingOdds: getOpeningOdds(row),
+        updatedAt: getUpdatedAt(row),
+        movement: row?.movement || null
+      };
     }
-
-    const existingTime =
-      existing.updatedAt
-        ? new Date(existing.updatedAt).getTime()
-        : 0;
-
-    const currentTime =
-      row.updatedAt
-        ? new Date(row.updatedAt).getTime()
-        : 0;
-
-    if (currentTime >= existingTime) {
-      map.set(key, row);
-    }
-  }
-
-  return [...map.values()];
-}
-
-function parseOddsRows(rawRows) {
-  const parsedRows =
-    rawRows
-      .map(parseOddsRow)
-      .filter(Boolean);
-
-  const rows =
-    selectLatestOdds(parsedRows);
-
-  const result = {
-    home: null,
-    draw: null,
-    away: null,
-
-    doubleChance1X: null,
-    doubleChanceX2: null,
-    doubleChance12: null,
-
-    over15: null,
-    over25: null,
-    over35: null,
-
-    under15: null,
-    under25: null,
-    under35: null,
-
-    bttsYes: null,
-    bttsNo: null,
-
-    rowsCount: rows.length,
-    rawCount: rawRows.length
-  };
-
-  for (const row of rows) {
-    const market = row.market;
-    const outcome = row.outcome;
-
-    /* 1X2 */
 
     if (
-      marketIs(row, [
-        "1x2",
-        "match_result",
-        "matchresult",
-        "three_way"
-      ])
+      outcome === "draw" ||
+      outcome === "x" ||
+      outcome.includes("draw")
     ) {
-      if (
-        outcomeIs(row, [
-          "home",
-          "1",
-          "1_home"
-        ])
-      ) {
-        result.home = row;
-      }
-
-      if (
-        outcomeIs(row, [
-          "draw",
-          "x"
-        ])
-      ) {
-        result.draw = row;
-      }
-
-      if (
-        outcomeIs(row, [
-          "away",
-          "2",
-          "2_away"
-        ])
-      ) {
-        result.away = row;
-      }
+      return {
+        type: "DRAW",
+        odds,
+        line,
+        bookmakerCount: getBookmakerCount(row),
+        previousOdds: getPreviousOdds(row),
+        openingOdds: getOpeningOdds(row),
+        updatedAt: getUpdatedAt(row),
+        movement: row?.movement || null
+      };
     }
-
-    /* Double chance */
 
     if (
-      market.includes("double") ||
-      market.includes("double_chance") ||
-      market === "dc"
+      outcome === "away" ||
+      outcome === "2" ||
+      outcome.includes("away")
     ) {
-      if (
-        outcome === "1x" ||
-        outcome.includes("1x")
-      ) {
-        result.doubleChance1X = row;
-      }
-
-      if (
-        outcome === "x2" ||
-        outcome.includes("x2")
-      ) {
-        result.doubleChanceX2 = row;
-      }
-
-      if (
-        outcome === "12" ||
-        outcome === "1_2" ||
-        outcome.includes("12")
-      ) {
-        result.doubleChance12 = row;
-      }
+      return {
+        type: "AWAY",
+        odds,
+        line,
+        bookmakerCount: getBookmakerCount(row),
+        previousOdds: getPreviousOdds(row),
+        openingOdds: getOpeningOdds(row),
+        updatedAt: getUpdatedAt(row),
+        movement: row?.movement || null
+      };
     }
+  }
 
-    /* Over / Under */
-
-    const isOU =
-      market.includes("over_under") ||
-      market.includes("overunder") ||
-      market.includes("totals") ||
-      market === "ou" ||
-      market.includes("goal");
-
-    if (isOU) {
-      const line = row.line;
-
-      const isOver =
-        outcome.includes("over");
-
-      const isUnder =
-        outcome.includes("under");
-
-      if (
-        line === 1.5 &&
-        isOver
-      ) {
-        result.over15 = row;
-      }
-
-      if (
-        line === 2.5 &&
-        isOver
-      ) {
-        result.over25 = row;
-      }
-
-      if (
-        line === 3.5 &&
-        isOver
-      ) {
-        result.over35 = row;
-      }
-
-      if (
-        line === 1.5 &&
-        isUnder
-      ) {
-        result.under15 = row;
-      }
-
-      if (
-        line === 2.5 &&
-        isUnder
-      ) {
-        result.under25 = row;
-      }
-
-      if (
-        line === 3.5 &&
-        isUnder
-      ) {
-        result.under35 = row;
-      }
+  if (isDoubleChance) {
+    if (
+      outcome === "1x" ||
+      outcome === "1 x" ||
+      outcome.includes("home or draw") ||
+      outcome.includes("home/draw")
+    ) {
+      return {
+        type: "1X",
+        odds,
+        line,
+        bookmakerCount: getBookmakerCount(row),
+        previousOdds: getPreviousOdds(row),
+        openingOdds: getOpeningOdds(row),
+        updatedAt: getUpdatedAt(row),
+        movement: row?.movement || null
+      };
     }
-
-    /* BTTS */
 
     if (
-      market === "btts" ||
-      market.includes("btts") ||
-      market.includes("both_teams")
+      outcome === "x2" ||
+      outcome === "x 2" ||
+      outcome.includes("draw or away") ||
+      outcome.includes("draw/away")
     ) {
-      if (
-        outcome === "yes" ||
-        outcome.includes("yes")
-      ) {
-        result.bttsYes = row;
-      }
+      return {
+        type: "X2",
+        odds,
+        line,
+        bookmakerCount: getBookmakerCount(row),
+        previousOdds: getPreviousOdds(row),
+        openingOdds: getOpeningOdds(row),
+        updatedAt: getUpdatedAt(row),
+        movement: row?.movement || null
+      };
+    }
 
-      if (
-        outcome === "no" ||
-        outcome.includes("no")
-      ) {
-        result.bttsNo = row;
+    if (
+      outcome === "12" ||
+      outcome === "1 2" ||
+      outcome.includes("home or away") ||
+      outcome.includes("home/away")
+    ) {
+      return {
+        type: "12",
+        odds,
+        line,
+        bookmakerCount: getBookmakerCount(row),
+        previousOdds: getPreviousOdds(row),
+        openingOdds: getOpeningOdds(row),
+        updatedAt: getUpdatedAt(row),
+        movement: row?.movement || null
+      };
+    }
+  }
+
+  if (isOverUnder) {
+    const isOver =
+      outcome.includes("over") ||
+      outcome === "o";
+
+    if (isOver && line !== null) {
+      const normalizedLine = Number(line.toFixed(2));
+
+      let type = null;
+
+      if (normalizedLine === 1.5) type = "OVER15";
+      if (normalizedLine === 2.5) type = "OVER25";
+      if (normalizedLine === 3.5) type = "OVER35";
+
+      if (type) {
+        return {
+          type,
+          odds,
+          line: normalizedLine,
+          bookmakerCount: getBookmakerCount(row),
+          previousOdds: getPreviousOdds(row),
+          openingOdds: getOpeningOdds(row),
+          updatedAt: getUpdatedAt(row),
+          movement: row?.movement || null
+        };
       }
     }
   }
 
-  return result;
-}
-
-async function getOdds(
-  eventId,
-  diagnostics = []
-) {
-  const path =
-    `/odds/?event_id=${encodeURIComponent(eventId)}`;
-
-  const rows =
-    await fetchAllPages(
-      path,
-      {
-        limit: 200,
-        maxPages: 10,
-        diagnostics
-      }
-    );
-
-  return {
-    rawRows: rows,
-    parsed: parseOddsRows(rows)
-  };
-}
-
-/* =========================================================
-   MOVEMENT
-========================================================= */
-
-function movementDirection(row) {
-  if (!row) return null;
-
-  if (row.movement === "SHORTENING") {
-    return "SHORTENING";
-  }
-
-  if (row.movement === "DRIFTING") {
-    return "DRIFTING";
-  }
-
-  const current = row.odds;
-  const previous = row.previousOdds;
-
-  if (
-    Number.isFinite(current) &&
-    Number.isFinite(previous) &&
-    previous > 1
-  ) {
-    if (current < previous) {
-      return "SHORTENING";
-    }
-
-    if (current > previous) {
-      return "DRIFTING";
+  if (isBTTS) {
+    if (
+      outcome === "yes" ||
+      outcome === "y" ||
+      outcome.includes("yes")
+    ) {
+      return {
+        type: "BTTS_YES",
+        odds,
+        line,
+        bookmakerCount: getBookmakerCount(row),
+        previousOdds: getPreviousOdds(row),
+        openingOdds: getOpeningOdds(row),
+        updatedAt: getUpdatedAt(row),
+        movement: row?.movement || null
+      };
     }
   }
 
   return null;
 }
 
-function movementStrength(row) {
-  if (!row) return 0;
+function chooseLatest(existing, incoming) {
+  if (!existing) return incoming;
 
-  const direction =
-    movementDirection(row);
+  const existingTime = existing.updatedAt
+    ? new Date(existing.updatedAt).getTime()
+    : 0;
 
-  let score = 0;
+  const incomingTime = incoming.updatedAt
+    ? new Date(incoming.updatedAt).getTime()
+    : 0;
 
-  if (direction === "SHORTENING") {
-    score += 5;
+  if (incomingTime >= existingTime) {
+    return incoming;
   }
 
-  if (direction === "DRIFTING") {
-    score -= 5;
+  return existing;
+}
+
+async function getOdds(eventId) {
+  const rows = await fetchAllPages(
+    `/odds/?event_id=${encodeURIComponent(eventId)}`,
+    {
+      limit: 200,
+      maxPages: 10
+    }
+  );
+
+  const parsed = {
+    home: null,
+    draw: null,
+    away: null,
+
+    dc1x: null,
+    dcx2: null,
+    dc12: null,
+
+    over15: null,
+    over25: null,
+    over35: null,
+
+    bttsYes: null,
+
+    rowsCount: rows.length,
+    rawCount: rows.length
+  };
+
+  for (const row of rows) {
+    const item = classifyOddsRow(row);
+
+    if (!item) continue;
+
+    if (item.type === "HOME") {
+      parsed.home = chooseLatest(parsed.home, item);
+    }
+
+    if (item.type === "DRAW") {
+      parsed.draw = chooseLatest(parsed.draw, item);
+    }
+
+    if (item.type === "AWAY") {
+      parsed.away = chooseLatest(parsed.away, item);
+    }
+
+    if (item.type === "1X") {
+      parsed.dc1x = chooseLatest(parsed.dc1x, item);
+    }
+
+    if (item.type === "X2") {
+      parsed.dcx2 = chooseLatest(parsed.dcx2, item);
+    }
+
+    if (item.type === "12") {
+      parsed.dc12 = chooseLatest(parsed.dc12, item);
+    }
+
+    if (item.type === "OVER15") {
+      parsed.over15 = chooseLatest(parsed.over15, item);
+    }
+
+    if (item.type === "OVER25") {
+      parsed.over25 = chooseLatest(parsed.over25, item);
+    }
+
+    if (item.type === "OVER35") {
+      parsed.over35 = chooseLatest(parsed.over35, item);
+    }
+
+    if (item.type === "BTTS_YES") {
+      parsed.bttsYes = chooseLatest(parsed.bttsYes, item);
+    }
+  }
+
+  return parsed;
+}
+
+/*
+|--------------------------------------------------------------------------
+| MOVEMENT
+|--------------------------------------------------------------------------
+*/
+
+function calculateMovement(oddsObject) {
+  if (!oddsObject) {
+    return {
+      movement: null,
+      movementScore: 0
+    };
+  }
+
+  const current = safeNumber(oddsObject.odds);
+  const previous = safeNumber(oddsObject.previousOdds);
+  const opening = safeNumber(oddsObject.openingOdds);
+
+  let score = 0;
+  let movement = oddsObject.movement || null;
+
+  if (
+    current &&
+    previous &&
+    previous > 0
+  ) {
+    const changePct =
+      ((current - previous) / previous) * 100;
+
+    if (changePct <= -0.75) {
+      score += 5;
+      movement = "SHORTENING";
+    } else if (changePct <= -0.25) {
+      score += 2;
+      movement = "SHORTENING";
+    } else if (changePct >= 0.75) {
+      score -= 5;
+      movement = "DRIFTING";
+    } else if (changePct >= 0.25) {
+      score -= 2;
+      movement = "DRIFTING";
+    }
   }
 
   if (
-    Number.isFinite(row.previousOdds) &&
-    row.previousOdds > 0 &&
-    Number.isFinite(row.odds)
+    current &&
+    opening &&
+    opening > 0
   ) {
-    const change =
-      (row.odds - row.previousOdds) /
-      row.previousOdds;
+    const openingChange =
+      ((current - opening) / opening) * 100;
 
-    if (change <= -0.05) {
-      score += 3;
-    }
-
-    if (change <= -0.10) {
+    if (openingChange <= -2) {
       score += 2;
-    }
-
-    if (change >= 0.05) {
-      score -= 3;
-    }
-
-    if (change >= 0.10) {
+    } else if (openingChange >= 2) {
       score -= 2;
     }
   }
 
-  return score;
-}
-
-/* =========================================================
-   VALUE
-========================================================= */
-
-function impliedProbability(odds) {
-  if (
-    !Number.isFinite(odds) ||
-    odds <= 1
-  ) {
-    return null;
+  if (movement === "SHORTENING") {
+    score += 2;
   }
 
-  return 1 / odds;
-}
-
-function valueEdge(
-  probabilityPercent,
-  odds
-) {
-  if (
-    !Number.isFinite(probabilityPercent) ||
-    !Number.isFinite(odds) ||
-    odds <= 1
-  ) {
-    return null;
+  if (movement === "DRIFTING") {
+    score -= 2;
   }
-
-  const modelProbability =
-    probabilityPercent / 100;
-
-  const implied =
-    impliedProbability(odds);
-
-  if (!Number.isFinite(implied)) {
-    return null;
-  }
-
-  return modelProbability - implied;
-}
-
-/* =========================================================
-   CANDIDATE
-========================================================= */
-
-function createCandidate({
-  event,
-  prediction,
-  oddsRow,
-  market,
-  selection,
-  probability,
-  label
-}) {
-  if (!oddsRow) {
-    return null;
-  }
-
-  if (
-    !Number.isFinite(probability) ||
-    probability < MIN_PROBABILITY
-  ) {
-    return null;
-  }
-
-  /*
-   * Kluczowa zmiana 6.6.4:
-   * odrzucamy kursy poniżej 1.25.
-   */
-  if (
-    !Number.isFinite(oddsRow.odds) ||
-    oddsRow.odds < MIN_ODDS ||
-    oddsRow.odds > MAX_ODDS
-  ) {
-    return null;
-  }
-
-  const edge =
-    valueEdge(
-      probability,
-      oddsRow.odds
-    );
-
-  if (!Number.isFinite(edge)) {
-    return null;
-  }
-
-  /*
-   * Kluczowa zmiana:
-   * model musi mieć dodatnią przewagę
-   * nad prawdopodobieństwem wynikającym z kursu.
-   */
-  if (edge < MIN_VALUE_EDGE) {
-    return null;
-  }
-
-  const movementScore =
-    movementStrength(oddsRow);
-
-  const bookmakerCount =
-    Number(
-      oddsRow.bookmakerCount || 0
-    );
-
-  const bookmakerBonus =
-    bookmakerCount >= 15
-      ? 3
-      : bookmakerCount >= 10
-        ? 2
-        : bookmakerCount >= 5
-          ? 1
-          : 0;
-
-  /*
-   * Prawdopodobieństwo:
-   * 50% = 0
-   * 60% = 10
-   * 70% = 20
-   * itd.
-   */
-  const probabilityScore =
-    probability - MIN_PROBABILITY;
-
-  /*
-   * Wartość:
-   * +5% edge = +10 pkt
-   * +10% edge = +20 pkt
-   *
-   * Wartość ma teraz większe znaczenie
-   * niż wcześniej.
-   */
-  const valueScore =
-    edge * 200;
-
-  const rankingScore =
-    probabilityScore +
-    valueScore +
-    movementScore +
-    bookmakerBonus;
 
   return {
-    eventId: Number(event.id),
-
-    home:
-      getTeamName(event, "home"),
-
-    away:
-      getTeamName(event, "away"),
-
-    eventDate:
-      event.event_date ||
-      event.date ||
-      null,
-
-    market,
-    selection,
-    label,
-
-    probability:
-      round(probability, 1),
-
-    odds:
-      round(oddsRow.odds, 3),
-
-    impliedProbability:
-      round(
-        impliedProbability(
-          oddsRow.odds
-        ) * 100,
-        1
-      ),
-
-    valueEdge:
-      round(
-        edge * 100,
-        2
-      ),
-
-    movement:
-      movementDirection(
-        oddsRow
-      ),
-
-    movementScore,
-
-    bookmakerCount:
-      oddsRow.bookmakerCount ?? null,
-
-    previousOdds:
-      round(
-        oddsRow.previousOdds,
-        3
-      ),
-
-    openingOdds:
-      round(
-        oddsRow.openingOdds,
-        3
-      ),
-
-    rankingScore:
-      round(
-        rankingScore,
-        2
-      ),
-
-    predictionConfidence:
-      prediction?.confidence ??
-      null,
-
-    scorePrediction:
-      prediction?.mostLikelyScore ??
-      null
+    movement,
+    movementScore: clamp(score, -7, 7)
   };
 }
 
-/* =========================================================
-   BUILD CANDIDATES
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| CANDIDATE MARKETS
+|--------------------------------------------------------------------------
+*/
 
-function buildCandidates(
+function makeMarketCandidate({
   event,
   prediction,
-  odds
-) {
+  odds,
+  type,
+  probability,
+  oddsObject,
+  label
+}) {
+  const p = safeNumber(probability);
+  const o = safeNumber(oddsObject?.odds);
+
+  if (p === null || o === null) return null;
+
+  if (p < MIN_PROBABILITY) return null;
+
+  if (o < MIN_ODDS || o > MAX_ODDS) return null;
+
+  const impliedProbability = (1 / o) * 100;
+
+  const valueEdge = p - impliedProbability;
+
+  if (valueEdge < MIN_CANDIDATE_VALUE_EDGE) {
+    return null;
+  }
+
+  const movementData = calculateMovement(oddsObject);
+
+  const bookmakerCount =
+    safeNumber(oddsObject?.bookmakerCount) || 0;
+
+  /*
+   * Probability component.
+   * Strong probabilities get more weight, but are not enough alone.
+   */
+  const probabilityScore =
+    clamp((p - 50) * 0.75, 0, 35);
+
+  /*
+   * Value component.
+   * Positive value helps strongly.
+   * Small negative value is allowed but penalized.
+   */
+  const valueScore =
+    clamp(valueEdge * 1.5, -10, 15);
+
+  /*
+   * Bookmaker breadth.
+   */
+  const bookmakerBonus =
+    clamp(bookmakerCount / 10, 0, 4);
+
+  /*
+   * Market-specific weighting.
+   */
+  let marketBonus = 0;
+
+  if (type === "1X" || type === "X2") {
+    marketBonus = 3;
+  }
+
+  if (type === "HOME" || type === "AWAY") {
+    marketBonus = 2;
+  }
+
+  if (
+    type === "OVER15" ||
+    type === "OVER25" ||
+    type === "BTTS_YES"
+  ) {
+    marketBonus = 1;
+  }
+
+  /*
+   * Very low odds are not automatically bad,
+   * but they receive no special bonus.
+   */
+  const qualityScore =
+    probabilityScore +
+    valueScore +
+    movementData.movementScore +
+    bookmakerBonus +
+    marketBonus;
+
+  return {
+    eventId: getEventId(event),
+
+    home: getHomeName(event),
+    away: getAwayName(event),
+
+    eventDate: getEventDate(event),
+
+    market: type,
+    selection: type,
+
+    label,
+
+    probability: round(p, 1),
+    odds: round(o, 3),
+    impliedProbability: round(impliedProbability, 1),
+    valueEdge: round(valueEdge, 2),
+
+    movement: movementData.movement,
+    movementScore: movementData.movementScore,
+
+    bookmakerCount,
+
+    previousOdds: oddsObject?.previousOdds ?? null,
+    openingOdds: oddsObject?.openingOdds ?? null,
+
+    probabilityScore: round(probabilityScore, 2),
+    valueScore: round(valueScore, 2),
+    bookmakerBonus: round(bookmakerBonus, 2),
+    marketBonus,
+
+    qualityScore: round(qualityScore, 2),
+
+    predictionConfidence:
+      prediction?.confidence ?? null,
+
+    scorePrediction:
+      prediction?.score ?? null,
+
+    warnings: []
+  };
+}
+
+/*
+|--------------------------------------------------------------------------
+| BUILD ALL CANDIDATES
+|--------------------------------------------------------------------------
+*/
+
+function buildCandidates(event, prediction, odds) {
+  if (!prediction || !odds) return [];
+
   const candidates = [];
 
-  if (!prediction) {
-    return candidates;
-  }
-
-  /* 1X2 */
-
-  const home =
-    createCandidate({
+  /*
+   * 1X2
+   */
+  if (odds.home) {
+    const c = makeMarketCandidate({
       event,
       prediction,
-      oddsRow: odds.home,
-      market: "1X2",
-      selection: "HOME",
-      label: "Gospodarze",
-      probability: prediction.home
+      odds,
+      type: "HOME",
+      probability: prediction.home,
+      oddsObject: odds.home,
+      label: "Wygrana gospodarzy"
     });
 
-  if (home) {
-    candidates.push(home);
+    if (c) candidates.push(c);
   }
 
-  const draw =
-    createCandidate({
+  if (odds.draw) {
+    const c = makeMarketCandidate({
       event,
       prediction,
-      oddsRow: odds.draw,
-      market: "1X2",
-      selection: "DRAW",
-      label: "Remis",
-      probability: prediction.draw
+      odds,
+      type: "DRAW",
+      probability: prediction.draw,
+      oddsObject: odds.draw,
+      label: "Remis"
     });
 
-  if (draw) {
-    candidates.push(draw);
+    if (c) candidates.push(c);
   }
 
-  const away =
-    createCandidate({
+  if (odds.away) {
+    const c = makeMarketCandidate({
       event,
       prediction,
-      oddsRow: odds.away,
-      market: "1X2",
-      selection: "AWAY",
-      label: "Goście",
-      probability: prediction.away
+      odds,
+      type: "AWAY",
+      probability: prediction.away,
+      oddsObject: odds.away,
+      label: "Wygrana gości"
     });
 
-  if (away) {
-    candidates.push(away);
+    if (c) candidates.push(c);
   }
 
-  /* DOUBLE CHANCE */
+  /*
+   * Double Chance.
+   *
+   * We prefer actual BSD double-chance odds when available.
+   * If not available, we do NOT invent an odds value.
+   */
+  if (odds.dc1x) {
+    const probability =
+      safeNumber(prediction.home) !== null &&
+      safeNumber(prediction.draw) !== null
+        ? prediction.home + prediction.draw
+        : null;
 
-  if (
-    Number.isFinite(prediction.home) &&
-    Number.isFinite(prediction.draw)
-  ) {
-    const p1x =
-      prediction.home +
-      prediction.draw;
-
-    const candidate =
-      createCandidate({
-        event,
-        prediction,
-        oddsRow:
-          odds.doubleChance1X,
-        market: "DOUBLE_CHANCE",
-        selection: "1X",
-        label:
-          "1X — gospodarze lub remis",
-        probability: p1x
-      });
-
-    if (candidate) {
-      candidates.push(candidate);
-    }
-  }
-
-  if (
-    Number.isFinite(prediction.draw) &&
-    Number.isFinite(prediction.away)
-  ) {
-    const px2 =
-      prediction.draw +
-      prediction.away;
-
-    const candidate =
-      createCandidate({
-        event,
-        prediction,
-        oddsRow:
-          odds.doubleChanceX2,
-        market: "DOUBLE_CHANCE",
-        selection: "X2",
-        label:
-          "X2 — remis lub goście",
-        probability: px2
-      });
-
-    if (candidate) {
-      candidates.push(candidate);
-    }
-  }
-
-  if (
-    Number.isFinite(prediction.home) &&
-    Number.isFinite(prediction.away)
-  ) {
-    const p12 =
-      prediction.home +
-      prediction.away;
-
-    const candidate =
-      createCandidate({
-        event,
-        prediction,
-        oddsRow:
-          odds.doubleChance12,
-        market: "DOUBLE_CHANCE",
-        selection: "12",
-        label:
-          "12 — bez remisu",
-        probability: p12
-      });
-
-    if (candidate) {
-      candidates.push(candidate);
-    }
-  }
-
-  /* TOTALS */
-
-  const over15 =
-    createCandidate({
+    const c = makeMarketCandidate({
       event,
       prediction,
-      oddsRow: odds.over15,
-      market: "TOTALS",
-      selection: "OVER_1.5",
-      label: "Powyżej 1.5 gola",
-      probability: prediction.over15
+      odds,
+      type: "1X",
+      probability,
+      oddsObject: odds.dc1x,
+      label: "Gospodarze lub remis"
     });
 
-  if (over15) {
-    candidates.push(over15);
+    if (c) candidates.push(c);
   }
 
-  const over25 =
-    createCandidate({
+  if (odds.dcx2) {
+    const probability =
+      safeNumber(prediction.draw) !== null &&
+      safeNumber(prediction.away) !== null
+        ? prediction.draw + prediction.away
+        : null;
+
+    const c = makeMarketCandidate({
       event,
       prediction,
-      oddsRow: odds.over25,
-      market: "TOTALS",
-      selection: "OVER_2.5",
-      label: "Powyżej 2.5 gola",
-      probability: prediction.over25
+      odds,
+      type: "X2",
+      probability,
+      oddsObject: odds.dcx2,
+      label: "Remis lub goście"
     });
 
-  if (over25) {
-    candidates.push(over25);
+    if (c) candidates.push(c);
   }
 
-  const over35 =
-    createCandidate({
+  if (odds.dc12) {
+    const probability =
+      safeNumber(prediction.home) !== null &&
+      safeNumber(prediction.away) !== null
+        ? prediction.home + prediction.away
+        : null;
+
+    const c = makeMarketCandidate({
       event,
       prediction,
-      oddsRow: odds.over35,
-      market: "TOTALS",
-      selection: "OVER_3.5",
-      label: "Powyżej 3.5 gola",
-      probability: prediction.over35
+      odds,
+      type: "12",
+      probability,
+      oddsObject: odds.dc12,
+      label: "Gospodarze lub goście"
     });
 
-  if (over35) {
-    candidates.push(over35);
+    if (c) candidates.push(c);
   }
 
-  /* BTTS */
-
-  const btts =
-    createCandidate({
+  /*
+   * Goals
+   */
+  if (odds.over15) {
+    const c = makeMarketCandidate({
       event,
       prediction,
-      oddsRow: odds.bttsYes,
-      market: "BTTS",
-      selection: "YES",
-      label:
-        "Obie drużyny strzelą",
-      probability:
-        prediction.bttsYes
+      odds,
+      type: "OVER15",
+      probability: prediction.over15,
+      oddsObject: odds.over15,
+      label: "Powyżej 1.5 gola"
     });
 
-  if (btts) {
-    candidates.push(btts);
+    if (c) candidates.push(c);
+  }
+
+  if (odds.over25) {
+    const c = makeMarketCandidate({
+      event,
+      prediction,
+      odds,
+      type: "OVER25",
+      probability: prediction.over25,
+      oddsObject: odds.over25,
+      label: "Powyżej 2.5 gola"
+    });
+
+    if (c) candidates.push(c);
+  }
+
+  if (odds.over35) {
+    const c = makeMarketCandidate({
+      event,
+      prediction,
+      odds,
+      type: "OVER35",
+      probability: prediction.over35,
+      oddsObject: odds.over35,
+      label: "Powyżej 3.5 gola"
+    });
+
+    if (c) candidates.push(c);
+  }
+
+  /*
+   * BTTS
+   */
+  if (odds.bttsYes) {
+    const c = makeMarketCandidate({
+      event,
+      prediction,
+      odds,
+      type: "BTTS",
+      probability: prediction.bttsYes,
+      oddsObject: odds.bttsYes,
+      label: "Obie drużyny strzelą"
+    });
+
+    if (c) candidates.push(c);
   }
 
   return candidates;
 }
 
-/* =========================================================
-   ANALYZE EVENT
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| EVENT DETAIL ENRICHMENT
+|--------------------------------------------------------------------------
+|
+| BSD public docs expose:
+| - /events/{id}/
+| - /events/{id}/lineups/
+| - H2H through match detail / MCP
+|
+| We try the REST forms without making them mandatory.
+| If an endpoint is unavailable, the analysis still works.
+|--------------------------------------------------------------------------
+*/
 
-async function analyzeEvent(
-  event,
-  prediction,
-  diagnostics
-) {
-  const oddsDiagnostics = [];
+async function fetchOptional(path) {
+  try {
+    const result = await bsdFetch(path);
+    return result.data;
+  } catch {
+    return null;
+  }
+}
 
-  const oddsResult =
-    await getOdds(
-      event.id,
-      oddsDiagnostics
-    );
-
-  if (diagnostics) {
-    diagnostics.push({
-      eventId: event.id,
-      odds: oddsDiagnostics
-    });
+function extractFormFromObject(data) {
+  if (!data || typeof data !== "object") {
+    return null;
   }
 
-  const candidates =
-    buildCandidates(
-      event,
-      prediction,
-      oddsResult.parsed
-    );
+  const homeForm =
+    data.home_form ||
+    data.homeForm ||
+    data.form?.home ||
+    data.teams?.home?.form ||
+    null;
+
+  const awayForm =
+    data.away_form ||
+    data.awayForm ||
+    data.form?.away ||
+    data.teams?.away?.form ||
+    null;
 
   return {
-    eventId:
-      Number(event.id),
-
-    home:
-      getTeamName(event, "home"),
-
-    away:
-      getTeamName(event, "away"),
-
-    eventDate:
-      event.event_date ||
-      event.date ||
-      null,
-
-    status:
-      event.status ||
-      null,
-
-    predictionAvailable:
-      Boolean(prediction),
-
-    prediction:
-      prediction
-        ? {
-            home:
-              prediction.home,
-
-            draw:
-              prediction.draw,
-
-            away:
-              prediction.away,
-
-            over15:
-              prediction.over15,
-
-            over25:
-              prediction.over25,
-
-            over35:
-              prediction.over35,
-
-            bttsYes:
-              prediction.bttsYes,
-
-            dnbHome:
-              prediction.dnbHome,
-
-            score:
-              prediction.mostLikelyScore,
-
-            confidence:
-              prediction.confidence
-          }
-        : null,
-
-    oddsAvailable:
-      oddsResult.rawRows.length > 0,
-
-    odds: {
-      home:
-        oddsResult.parsed.home
-          ? round(
-              oddsResult.parsed.home.odds,
-              3
-            )
-          : null,
-
-      draw:
-        oddsResult.parsed.draw
-          ? round(
-              oddsResult.parsed.draw.odds,
-              3
-            )
-          : null,
-
-      away:
-        oddsResult.parsed.away
-          ? round(
-              oddsResult.parsed.away.odds,
-              3
-            )
-          : null,
-
-      over15:
-        oddsResult.parsed.over15
-          ? round(
-              oddsResult.parsed.over15.odds,
-              3
-            )
-          : null,
-
-      over25:
-        oddsResult.parsed.over25
-          ? round(
-              oddsResult.parsed.over25.odds,
-              3
-            )
-          : null,
-
-      over35:
-        oddsResult.parsed.over35
-          ? round(
-              oddsResult.parsed.over35.odds,
-              3
-            )
-          : null,
-
-      bttsYes:
-        oddsResult.parsed.bttsYes
-          ? round(
-              oddsResult.parsed.bttsYes.odds,
-              3
-            )
-          : null,
-
-      rowsCount:
-        oddsResult.parsed.rowsCount,
-
-      rawCount:
-        oddsResult.parsed.rawCount
-    },
-
-    candidates
+    home: homeForm,
+    away: awayForm
   };
 }
 
-/* =========================================================
-   MAIN ANALYSIS
-========================================================= */
+function extractH2H(data) {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
 
-async function runAnalysis(date) {
-  const started =
-    Date.now();
+  return (
+    data.head_to_head ||
+    data.h2h ||
+    data.headToHead ||
+    data.match?.head_to_head ||
+    null
+  );
+}
+
+function extractLineups(data) {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  return (
+    data.lineups ||
+    data.teams ||
+    data.data ||
+    null
+  );
+}
+
+function analyzeSupportingData({
+  candidate,
+  detail,
+  lineups,
+  h2h
+}) {
+  const signals = [];
+  const warnings = [];
+
+  if (candidate.movement === "SHORTENING") {
+    signals.push("kurs skraca się");
+  }
+
+  if (candidate.movement === "DRIFTING") {
+    warnings.push("kurs dryfuje");
+  }
+
+  if (candidate.bookmakerCount >= 10) {
+    signals.push("szerokie potwierdzenie bukmacherów");
+  } else if (
+    candidate.bookmakerCount > 0 &&
+    candidate.bookmakerCount < 5
+  ) {
+    warnings.push("mało bukmacherów");
+  }
+
+  if (candidate.valueEdge >= 3) {
+    signals.push("dodatnie value");
+  } else if (candidate.valueEdge < 0) {
+    warnings.push("value poniżej rynku");
+  }
+
+  const form = extractFormFromObject(detail);
+
+  if (form?.home || form?.away) {
+    signals.push("dostępna forma zespołów");
+  }
+
+  if (h2h) {
+    signals.push("dostępne H2H");
+  }
+
+  if (lineups) {
+    signals.push("dostępne dane o składach");
+  }
+
+  /*
+   * Do not invent referee information.
+   */
+  const referee =
+    detail?.referee ||
+    detail?.officials?.referee ||
+    null;
+
+  if (referee) {
+    signals.push("dostępny sędzia");
+  }
+
+  return {
+    signals,
+    warnings,
+    referee: referee
+      ? {
+          id: referee.id ?? null,
+          name: referee.name ?? null
+        }
+      : null
+  };
+}
+
+async function enrichCandidates(candidates) {
+  const selected = [...candidates]
+    .sort((a, b) => b.qualityScore - a.qualityScore)
+    .slice(0, 15);
+
+  const results = [];
+
+  for (let i = 0; i < selected.length; i += DETAIL_CONCURRENCY) {
+    const batch = selected.slice(
+      i,
+      i + DETAIL_CONCURRENCY
+    );
+
+    const enriched = await Promise.all(
+      batch.map(async (candidate) => {
+        const eventId = candidate.eventId;
+
+        const detail = await fetchOptional(
+          `/events/${eventId}/`
+        );
+
+        const lineups = await fetchOptional(
+          `/events/${eventId}/lineups/`
+        );
+
+        /*
+         * H2H endpoint is attempted in the REST form.
+         * If unavailable, no data is fabricated.
+         */
+        const h2h = await fetchOptional(
+          `/events/${eventId}/h2h/`
+        );
+
+        const supporting = analyzeSupportingData({
+          candidate,
+          detail,
+          lineups,
+          h2h
+        });
+
+        const extraScore =
+          supporting.signals.includes("kurs skraca się")
+            ? 1.5
+            : 0;
+
+        const penalty =
+          supporting.warnings.includes("kurs dryfuje")
+            ? 2
+            : 0;
+
+        return {
+          ...candidate,
+
+          supportingSignals: supporting.signals,
+
+          warnings: [
+            ...(candidate.warnings || []),
+            ...supporting.warnings
+          ],
+
+          referee: supporting.referee,
+
+          hasDetail: Boolean(detail),
+          hasLineups: Boolean(lineups),
+          hasH2H: Boolean(h2h),
+
+          qualityScore: round(
+            candidate.qualityScore +
+            extraScore -
+            penalty,
+            2
+          )
+        };
+      })
+    );
+
+    results.push(...enriched);
+  }
+
+  return results;
+}
+
+/*
+|--------------------------------------------------------------------------
+| FINAL RANKING
+|--------------------------------------------------------------------------
+*/
+
+function rankCandidates(candidates) {
+  /*
+   * One final candidate per event.
+   * This prevents the same match from taking multiple positions.
+   */
+  const bestPerEvent = new Map();
+
+  for (const candidate of candidates) {
+    const existing = bestPerEvent.get(candidate.eventId);
+
+    if (
+      !existing ||
+      candidate.qualityScore > existing.qualityScore
+    ) {
+      bestPerEvent.set(
+        candidate.eventId,
+        candidate
+      );
+    }
+  }
+
+  return [...bestPerEvent.values()]
+    .sort((a, b) => {
+      if (b.qualityScore !== a.qualityScore) {
+        return b.qualityScore - a.qualityScore;
+      }
+
+      if (b.probability !== a.probability) {
+        return b.probability - a.probability;
+      }
+
+      return b.valueEdge - a.valueEdge;
+    })
+    .slice(0, MAX_TOP_PICKS)
+    .map((item, index) => ({
+      rank: index + 1,
+      ...item
+    }));
+}
+
+/*
+|--------------------------------------------------------------------------
+| ANALYZE
+|--------------------------------------------------------------------------
+*/
+
+async function analyzeDate(date) {
+  const started = Date.now();
 
   const eventDiagnostics = [];
   const predictionDiagnostics = [];
-  const oddsDiagnostics = [];
 
-  const rawEvents =
-    await getEventsForDate(
-      date,
-      eventDiagnostics
-    );
+  const events = await getEventsForDate(
+    date,
+    eventDiagnostics
+  );
 
-  /* UNIQUE EVENTS */
+  const {
+    map: predictionMap,
+    total: predictionsTotal,
+    parsed: predictionsParsed
+  } = await getAllPredictions(
+    predictionDiagnostics
+  );
 
-  const eventMap =
-    new Map();
-
-  for (const event of rawEvents) {
-    if (!event || !event.id) {
-      continue;
-    }
-
-    eventMap.set(
-      Number(event.id),
-      event
-    );
-  }
-
-  const allEvents =
-    [...eventMap.values()];
-
-  /* UPCOMING */
-
-  const upcomingEvents =
-    allEvents.filter(
-      (event) =>
-        isUpcomingEvent(
-          event,
-          date
-        )
-    );
-
-  /* CHRONOLOGICAL */
-
-  upcomingEvents.sort(
-    (a, b) => {
-      const da =
-        new Date(
-          a.event_date ||
-          a.date ||
-          a.start_time ||
-          0
-        ).getTime();
-
-      const db =
-        new Date(
-          b.event_date ||
-          b.date ||
-          b.start_time ||
-          0
-        ).getTime();
-
-      return da - db;
-    }
+  const upcomingEvents = events.filter(
+    isUpcomingEvent
   );
 
   const eventsToAnalyze =
@@ -1680,122 +1571,102 @@ async function runAnalysis(date) {
       MAX_EVENTS_TO_ANALYZE
     );
 
-  /* PREDICTIONS */
+  const analysis = [];
 
-  const rawPredictions =
-    await getAllPredictions(
-      predictionDiagnostics
-    );
+  const allCandidates = [];
 
-  const predictions =
-    new Map();
+  for (const event of eventsToAnalyze) {
+    const eventId = getEventId(event);
 
-  let predictionsParsed = 0;
+    if (!eventId) continue;
 
-  for (const row of rawPredictions) {
-    const parsed =
-      parsePredictionRow(row);
-
-    if (
-      parsed &&
-      parsed.eventId
-    ) {
-      predictions.set(
-        Number(parsed.eventId),
-        parsed
-      );
-
-      predictionsParsed++;
-    }
-  }
-
-  /* EVENTS */
-
-  const analyzed = [];
-
-  for (
-    const event of eventsToAnalyze
-  ) {
     const prediction =
-      predictions.get(
-        Number(event.id)
-      ) || null;
+      predictionMap.get(eventId) || null;
 
-    const result =
-      await analyzeEvent(
-        event,
-        prediction,
-        oddsDiagnostics
-      );
+    const odds = await getOdds(eventId);
 
-    analyzed.push(result);
-  }
-
-  /* ALL CANDIDATES */
-
-  const allCandidates =
-    analyzed.flatMap(
-      (item) =>
-        item.candidates || []
+    const candidates = buildCandidates(
+      event,
+      prediction,
+      odds
     );
 
-  /*
-   * Jedna propozycja z jednego meczu.
-   */
+    analysis.push({
+      eventId,
 
-  const bestByEvent =
-    new Map();
+      home: getHomeName(event),
+      away: getAwayName(event),
 
-  for (
-    const candidate of allCandidates
-  ) {
-    const existing =
-      bestByEvent.get(
-        candidate.eventId
-      );
+      eventDate: getEventDate(event),
 
-    if (
-      !existing ||
-      candidate.rankingScore >
-        existing.rankingScore
-    ) {
-      bestByEvent.set(
-        candidate.eventId,
-        candidate
-      );
-    }
+      status:
+        event.status ||
+        event.state ||
+        event.match_status ||
+        "unknown",
+
+      predictionAvailable: Boolean(prediction),
+      prediction,
+
+      oddsAvailable:
+        Boolean(
+          odds.home ||
+          odds.draw ||
+          odds.away ||
+          odds.dc1x ||
+          odds.dcx2 ||
+          odds.dc12 ||
+          odds.over15 ||
+          odds.over25 ||
+          odds.over35 ||
+          odds.bttsYes
+        ),
+
+      odds: {
+        home: odds.home?.odds ?? null,
+        draw: odds.draw?.odds ?? null,
+        away: odds.away?.odds ?? null,
+
+        doubleChance1X:
+          odds.dc1x?.odds ?? null,
+
+        doubleChanceX2:
+          odds.dcx2?.odds ?? null,
+
+        doubleChance12:
+          odds.dc12?.odds ?? null,
+
+        over15: odds.over15?.odds ?? null,
+        over25: odds.over25?.odds ?? null,
+        over35: odds.over35?.odds ?? null,
+
+        bttsYes: odds.bttsYes?.odds ?? null,
+
+        rowsCount: odds.rowsCount,
+        rawCount: odds.rawCount
+      },
+
+      candidates
+    });
+
+    allCandidates.push(...candidates);
   }
 
   /*
-   * Ranking końcowy.
+   * Enrich only the best preliminary candidates.
    */
-
-  const qualifiedCandidates =
-    [...bestByEvent.values()]
-      .sort(
-        (a, b) =>
-          b.rankingScore -
-          a.rankingScore
-      );
-
-  /*
-   * MAX 5.
-   *
-   * Nie uzupełniamy sztucznie.
-   */
+  const enrichedCandidates =
+    await enrichCandidates(
+      allCandidates
+    );
 
   const topPicks =
-    qualifiedCandidates
-      .slice(
-        0,
-        MAX_TOP_PICKS
-      )
-      .map(
-        (candidate, index) => ({
-          rank: index + 1,
-          ...candidate
-        })
-      );
+    rankCandidates(
+      enrichedCandidates
+    );
+
+  const processingMs =
+    Date.now() - started;
 
   return {
     version: VERSION,
@@ -1806,8 +1677,7 @@ async function runAnalysis(date) {
     generatedAt:
       new Date().toISOString(),
 
-    processingMs:
-      Date.now() - started,
+    processingMs,
 
     exchange: {
       connected: false,
@@ -1816,31 +1686,26 @@ async function runAnalysis(date) {
         "Betting exchange data is not connected. No exchange movement is fabricated."
     },
 
-    eventsReturned:
-      allEvents.length,
+    eventsReturned: events.length,
 
     upcomingEvents:
       upcomingEvents.length,
 
     eventsAnalyzed:
-      analyzed.length,
+      eventsToAnalyze.length,
 
     eventsExcluded:
-      allEvents.length -
-      upcomingEvents.length,
+      Math.max(
+        0,
+        events.length -
+        upcomingEvents.length
+      ),
 
-    predictionsTotal:
-      rawPredictions.length,
-
+    predictionsTotal,
     predictionsParsed,
 
-    /*
-     * Liczba meczów,
-     * z których mamy co najmniej jeden
-     * kwalifikujący się typ.
-     */
     qualificationCount:
-      qualifiedCandidates.length,
+      allCandidates.length,
 
     maxTopPicks:
       MAX_TOP_PICKS,
@@ -1855,8 +1720,8 @@ async function runAnalysis(date) {
       maxOdds:
         MAX_ODDS,
 
-      minValueEdge:
-        `${MIN_VALUE_EDGE * 100}%`,
+      minCandidateValueEdge:
+        `${MIN_CANDIDATE_VALUE_EDGE}%`,
 
       maxEventsAnalyzed:
         MAX_EVENTS_TO_ANALYZE
@@ -1868,542 +1733,152 @@ async function runAnalysis(date) {
 
     topPicks,
 
-    analysis: analyzed
+    analysis
   };
 }
 
-/* =========================================================
-   ROUTES
-========================================================= */
-
-app.get(
-  "/",
-  (req, res) => {
-    res.json({
-      status: "ok",
-      service:
-        "Bet Analyzer Live",
-      version: VERSION,
-      source: SOURCE,
-      message:
-        "Backend is running."
-    });
-  }
-);
-
-app.get(
-  "/health",
-  (req, res) => {
-    res.json({
-      status: "ok",
-      version: VERSION,
-      source: SOURCE
-    });
-  }
-);
-
-/* =========================================================
-   EVENTS
-========================================================= */
-
-app.get(
-  "/api/events",
-  async (req, res) => {
-    try {
-      const date =
-        req.query.date ||
-        new Date()
-          .toISOString()
-          .slice(0, 10);
-
-      const diagnostics = [];
-
-      const rows =
-        await getEventsForDate(
-          date,
-          diagnostics
-        );
-
-      const events =
-        rows
-          .filter(
-            (event) =>
-              isUpcomingEvent(
-                event,
-                date
-              )
-          )
-          .map(
-            (event) => ({
-              id: event.id,
-
-              home:
-                getTeamName(
-                  event,
-                  "home"
-                ),
-
-              away:
-                getTeamName(
-                  event,
-                  "away"
-                ),
-
-              eventDate:
-                event.event_date ||
-                event.date ||
-                null,
-
-              status:
-                event.status ||
-                null,
-
-              league:
-                event.league_name ||
-                event.league?.name ||
-                null
-            })
-          );
-
-      res.json({
-        version: VERSION,
-        source: SOURCE,
-        date,
-        count:
-          events.length,
-        events,
-        diagnostics
-      });
-    } catch (error) {
-      res.status(500).json({
-        version: VERSION,
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-/* =========================================================
-   ANALYZE
-========================================================= */
-
-app.get(
-  "/api/analyze",
-  async (req, res) => {
-    try {
-      const date =
-        req.query.date ||
-        new Date()
-          .toISOString()
-          .slice(0, 10);
-
-      const result =
-        await runAnalysis(
-          date
-        );
-
-      res.json(result);
-    } catch (error) {
-      console.error(error);
-
-      res.status(500).json({
-        version: VERSION,
-        source: SOURCE,
-        error:
-          error.message,
-        stack:
-          process.env.NODE_ENV ===
-          "production"
-            ? undefined
-            : error.stack
-      });
-    }
-  }
-);
-
-/* =========================================================
-   TOP PICKS
-========================================================= */
-
-app.get(
-  "/api/top-picks",
-  async (req, res) => {
-    try {
-      const date =
-        req.query.date ||
-        new Date()
-          .toISOString()
-          .slice(0, 10);
-
-      const result =
-        await runAnalysis(
-          date
-        );
-
-      res.json({
-        version:
-          result.version,
-
-        source:
-          result.source,
-
-        date:
-          result.date,
-
-        generatedAt:
-          result.generatedAt,
-
-        exchange:
-          result.exchange,
-
-        qualificationCount:
-          result.qualificationCount,
-
-        maxTopPicks:
-          result.maxTopPicks,
-
-        thresholds:
-          result.thresholds,
-
-        topPicks:
-          result.topPicks
-      });
-    } catch (error) {
-      console.error(error);
-
-      res.status(500).json({
-        version: VERSION,
-        source: SOURCE,
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-/* =========================================================
-   DEBUG ODDS
-========================================================= */
-
-app.get(
-  "/api/debug-odds",
-  async (req, res) => {
-    try {
-      const eventId =
-        Number(
-          req.query.eventId
-        );
-
-      if (!eventId) {
-        return res.status(400).json({
-          version: VERSION,
-          error:
-            "eventId is required"
-        });
-      }
-
-      const diagnostics = [];
-
-      const result =
-        await getOdds(
-          eventId,
-          diagnostics
-        );
-
-      res.json({
-        version: VERSION,
-
-        eventId,
-
-        rawCount:
-          result.rawRows.length,
-
-        parsed: {
-          home:
-            result.parsed.home
-              ? {
-                  odds:
-                    result.parsed
-                      .home
-                      .odds,
-
-                  previousOdds:
-                    result.parsed
-                      .home
-                      .previousOdds,
-
-                  openingOdds:
-                    result.parsed
-                      .home
-                      .openingOdds,
-
-                  movement:
-                    result.parsed
-                      .home
-                      .movement
-                }
-              : null,
-
-          draw:
-            result.parsed.draw
-              ? {
-                  odds:
-                    result.parsed
-                      .draw
-                      .odds,
-
-                  previousOdds:
-                    result.parsed
-                      .draw
-                      .previousOdds,
-
-                  openingOdds:
-                    result.parsed
-                      .draw
-                      .openingOdds,
-
-                  movement:
-                    result.parsed
-                      .draw
-                      .movement
-                }
-              : null,
-
-          away:
-            result.parsed.away
-              ? {
-                  odds:
-                    result.parsed
-                      .away
-                      .odds,
-
-                  previousOdds:
-                    result.parsed
-                      .away
-                      .previousOdds,
-
-                  openingOdds:
-                    result.parsed
-                      .away
-                      .openingOdds,
-
-                  movement:
-                    result.parsed
-                      .away
-                      .movement
-                }
-              : null,
-
-          over15:
-            result.parsed.over15
-              ? {
-                  odds:
-                    result.parsed
-                      .over15
-                      .odds,
-
-                  previousOdds:
-                    result.parsed
-                      .over15
-                      .previousOdds,
-
-                  openingOdds:
-                    result.parsed
-                      .over15
-                      .openingOdds,
-
-                  movement:
-                    result.parsed
-                      .over15
-                      .movement,
-
-                  line:
-                    result.parsed
-                      .over15
-                      .line
-                }
-              : null,
-
-          over25:
-            result.parsed.over25
-              ? {
-                  odds:
-                    result.parsed
-                      .over25
-                      .odds,
-
-                  previousOdds:
-                    result.parsed
-                      .over25
-                      .previousOdds,
-
-                  openingOdds:
-                    result.parsed
-                      .over25
-                      .openingOdds,
-
-                  movement:
-                    result.parsed
-                      .over25
-                      .movement,
-
-                  line:
-                    result.parsed
-                      .over25
-                      .line
-                }
-              : null,
-
-          over35:
-            result.parsed.over35
-              ? {
-                  odds:
-                    result.parsed
-                      .over35
-                      .odds,
-
-                  previousOdds:
-                    result.parsed
-                      .over35
-                      .previousOdds,
-
-                  openingOdds:
-                    result.parsed
-                      .over35
-                      .openingOdds,
-
-                  movement:
-                    result.parsed
-                      .over35
-                      .movement,
-
-                  line:
-                    result.parsed
-                      .over35
-                      .line
-                }
-              : null,
-
-          bttsYes:
-            result.parsed.bttsYes
-              ? {
-                  odds:
-                    result.parsed
-                      .bttsYes
-                      .odds,
-
-                  previousOdds:
-                    result.parsed
-                      .bttsYes
-                      .previousOdds,
-
-                  openingOdds:
-                    result.parsed
-                      .bttsYes
-                      .openingOdds,
-
-                  movement:
-                    result.parsed
-                      .bttsYes
-                      .movement
-                }
-              : null
-        },
-
-        diagnostics
-      });
-    } catch (error) {
-      res.status(500).json({
-        version: VERSION,
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-/* =========================================================
-   DEBUG PREDICTIONS
-========================================================= */
-
-app.get(
-  "/api/debug-predictions",
-  async (req, res) => {
-    try {
-      const diagnostics = [];
-
-      const rows =
-        await getAllPredictions(
-          diagnostics
-        );
-
-      const parsed =
-        rows
-          .map(
-            parsePredictionRow
-          )
-          .filter(Boolean);
-
-      res.json({
-        version: VERSION,
-        source: SOURCE,
-
-        count:
-          rows.length,
-
-        parsedCount:
-          parsed.length,
-
-        diagnostics,
-
-        firstRows:
-          parsed.slice(
-            0,
-            10
-          )
-      });
-    } catch (error) {
-      res.status(500).json({
-        version: VERSION,
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-/* =========================================================
-   ERROR HANDLER
-========================================================= */
-
-app.use(
-  (
-    err,
-    req,
-    res,
-    next
-  ) => {
-    console.error(err);
+/*
+|--------------------------------------------------------------------------
+| ROUTES
+|--------------------------------------------------------------------------
+*/
+
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    service: "Bet Analyzer Live",
+    version: VERSION,
+    source: SOURCE,
+    message: "Backend is running."
+  });
+});
+
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    service: "Bet Analyzer Live",
+    version: VERSION,
+    source: SOURCE
+  });
+});
+
+app.get("/api/analyze", async (req, res) => {
+  try {
+    const date =
+      req.query.date ||
+      isoDateOnly(new Date());
+
+    const result =
+      await analyzeDate(date);
+
+    res.json(result);
+  } catch (error) {
+    console.error("ANALYZE ERROR:", error);
 
     res.status(500).json({
       version: VERSION,
-      error:
-        err?.message ||
-        "Internal server error"
+      source: SOURCE,
+      status: "error",
+      message:
+        error?.message ||
+        "Analysis failed."
     });
   }
-);
+});
 
-/* =========================================================
-   START
-========================================================= */
+/*
+|--------------------------------------------------------------------------
+| DEBUG ODDS
+|--------------------------------------------------------------------------
+*/
 
-app.listen(
-  PORT,
-  () => {
-    console.log(
-      `Bet Analyzer Live ${VERSION} running on port ${PORT}`
+app.get("/api/debug-odds", async (req, res) => {
+  try {
+    const eventId =
+      safeNumber(req.query.eventId);
+
+    if (!eventId) {
+      return res.status(400).json({
+        error: "eventId is required"
+      });
+    }
+
+    const diagnostics = [];
+
+    const rows = await fetchAllPages(
+      `/odds/?event_id=${eventId}`,
+      {
+        limit: 200,
+        maxPages: 10,
+        diagnostics
+      }
     );
+
+    res.json({
+      version: VERSION,
+      eventId,
+      status: 200,
+      count: rows.length,
+      diagnostics,
+      firstRows: rows.slice(0, 30)
+    });
+  } catch (error) {
+    res.status(500).json({
+      version: VERSION,
+      error:
+        error?.message ||
+        "debug odds failed"
+    });
   }
-);
+});
+
+/*
+|--------------------------------------------------------------------------
+| DEBUG PREDICTIONS
+|--------------------------------------------------------------------------
+*/
+
+app.get("/api/debug-predictions", async (req, res) => {
+  try {
+    const diagnostics = [];
+
+    const result =
+      await getAllPredictions(
+        diagnostics
+      );
+
+    res.json({
+      version: VERSION,
+
+      count: result.total,
+
+      parsed:
+        result.parsed,
+
+      diagnostics,
+
+      sample:
+        [...result.map.values()]
+          .slice(0, 10)
+    });
+  } catch (error) {
+    res.status(500).json({
+      version: VERSION,
+      error:
+        error?.message ||
+        "debug predictions failed"
+    });
+  }
+});
+
+/*
+|--------------------------------------------------------------------------
+| START
+|--------------------------------------------------------------------------
+*/
+
+app.listen(PORT, () => {
+  console.log(
+    `Bet Analyzer Live ${VERSION} running on port ${PORT}`
+  );
+});
