@@ -1,1 +1,17 @@
-{"name":"bet-analyzer-backend","version":"2.1.0","type":"module","scripts":{"start":"node server.js"},"dependencies":{"cors":"^2.8.5","dotenv":"^16.4.7","express":"^5.1.0"},"engines":{"node":">=20"}}
+{
+  "name": "bet-analyzer-backend",
+  "version": "7.1.6",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0"
+  }
+}
