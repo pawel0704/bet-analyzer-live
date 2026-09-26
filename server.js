@@ -14,7 +14,7 @@ const PORT = process.env.PORT || 10000;
 const BSD_API_KEY = process.env.BSD_API_KEY;
 const BSD_BASE = "https://sports.bzzoiro.com/api/v2";
 
-const VERSION = "7.0.8";
+const VERSION = "7.0.9";
 const SOURCE = "BSD";
 
 if (!BSD_API_KEY) {
@@ -230,7 +230,10 @@ function getPredictionObject(data) {
     return null;
   }
 
-  if (data?.prediction && typeof data.prediction === "object") {
+  if (
+    data?.prediction &&
+    typeof data.prediction === "object"
+  ) {
     return data.prediction;
   }
 
@@ -255,10 +258,7 @@ function getConfidence(prediction) {
 }
 
 function getPredictionRecommendation(prediction) {
-  return (
-    prediction?.recommendations ??
-    null
-  );
+  return prediction?.recommendations ?? null;
 }
 
 /* =========================================================
@@ -372,14 +372,9 @@ function buildCandidates(event, prediction) {
 
       status:
         getEventStatus(event) ||
-        "upcoming",
+        "notstarted",
     });
   };
-
-  /*
-   * EXISTING MARKET GENERATION
-   * No ranking weights changed.
-   */
 
   if (
     homeProb !== null &&
@@ -741,11 +736,6 @@ function attachOdds(
 function calculateScore(
   candidate
 ) {
-  /*
-   * SAME SCORE STRUCTURE.
-   * No new weights introduced.
-   */
-
   let score =
     Number(
       candidate.probability || 0
@@ -883,37 +873,23 @@ function selectTopPicks(
 }
 
 /* =========================================================
-   MAIN ANALYZER
+   EVENT FILTER
    ========================================================= */
 
-async function buildTopPicks(
-  date
+function filterUpcomingEvents(
+  rows
 ) {
-  const started =
-    Date.now();
-
-  /*
-   * STEP 1:
-   * Real upcoming fixture list.
-   */
-  const eventsData =
-    await fetchUpcomingEvents(
-      date
-    );
-
-  const eventRows =
-    getRows(eventsData);
-
   const now =
     Date.now();
 
-  const validEvents = [];
-
-  const eventFilterStats = {
+  const stats = {
     received:
-      eventRows.length,
+      rows.length,
 
     accepted: 0,
+
+    acceptedNotstarted: 0,
+    acceptedUpcoming: 0,
 
     rejectedFinished: 0,
     rejectedLive: 0,
@@ -924,7 +900,9 @@ async function buildTopPicks(
     rejectedMissingDate: 0,
   };
 
-  for (const event of eventRows) {
+  const accepted = [];
+
+  for (const event of rows) {
     const status =
       getEventStatus(event);
 
@@ -938,14 +916,19 @@ async function buildTopPicks(
       status ===
       "finished"
     ) {
-      eventFilterStats.rejectedFinished++;
+      stats.rejectedFinished++;
       continue;
     }
 
     if (
-      status === "live"
+      status === "live" ||
+      status === "1st_half" ||
+      status === "2nd_half" ||
+      status === "halftime" ||
+      status === "extra_time" ||
+      status === "penalties"
     ) {
-      eventFilterStats.rejectedLive++;
+      stats.rejectedLive++;
       continue;
     }
 
@@ -953,7 +936,7 @@ async function buildTopPicks(
       status ===
       "cancelled"
     ) {
-      eventFilterStats.rejectedCancelled++;
+      stats.rejectedCancelled++;
       continue;
     }
 
@@ -961,49 +944,105 @@ async function buildTopPicks(
       status ===
       "postponed"
     ) {
-      eventFilterStats.rejectedPostponed++;
+      stats.rejectedPostponed++;
       continue;
     }
 
+    /*
+     * BSD currently returns "notstarted"
+     * for fixtures that have not begun.
+     * "upcoming" is also accepted because
+     * BSD documentation uses both conventions.
+     */
     if (
-      status &&
-      status !==
-        "upcoming"
+      status !== "notstarted" &&
+      status !== "upcoming"
     ) {
-      eventFilterStats.rejectedOtherStatus++;
+      stats.rejectedOtherStatus++;
       continue;
     }
 
     if (!parsedDate) {
-      eventFilterStats.rejectedMissingDate++;
+      stats.rejectedMissingDate++;
       continue;
     }
 
+    /*
+     * Never analyse a match whose kickoff
+     * has already passed.
+     */
     if (
       parsedDate.getTime() <=
       now
     ) {
-      eventFilterStats.rejectedPastKickoff++;
+      stats.rejectedPastKickoff++;
       continue;
     }
 
-    eventFilterStats.accepted++;
+    stats.accepted++;
 
-    validEvents.push(event);
+    if (
+      status ===
+      "notstarted"
+    ) {
+      stats.acceptedNotstarted++;
+    }
+
+    if (
+      status ===
+      "upcoming"
+    ) {
+      stats.acceptedUpcoming++;
+    }
+
+    accepted.push(event);
   }
+
+  return {
+    accepted,
+    stats,
+  };
+}
+
+/* =========================================================
+   MAIN ANALYZER
+   ========================================================= */
+
+async function buildTopPicks(
+  date
+) {
+  const started =
+    Date.now();
+
+  /*
+   * STEP 1:
+   * Get actual fixture list.
+   */
+  const eventsData =
+    await fetchUpcomingEvents(
+      date
+    );
+
+  const eventRows =
+    getRows(eventsData);
+
+  const {
+    accepted: validEvents,
+    stats: eventFilterStats,
+  } =
+    filterUpcomingEvents(
+      eventRows
+    );
 
   /*
    * STEP 2:
-   * Get prediction individually for every
-   * genuinely upcoming event.
+   * Prediction per real upcoming event.
    */
   const candidates = [];
 
   let predictionRequests = 0;
   let predictionSuccessful = 0;
   let predictionFailed = 0;
-
-  const predictionDebug = [];
 
   for (const event of validEvents) {
     const eventId =
@@ -1031,13 +1070,6 @@ async function buildTopPicks(
         !prediction.markets
       ) {
         predictionFailed++;
-
-        predictionDebug.push({
-          eventId,
-          status:
-            "NO_PREDICTION_MARKETS",
-        });
-
         continue;
       }
 
@@ -1052,23 +1084,8 @@ async function buildTopPicks(
       candidates.push(
         ...rowCandidates
       );
-
-      predictionDebug.push({
-        eventId,
-        status: "OK",
-        candidates:
-          rowCandidates.length,
-      });
     } catch (error) {
       predictionFailed++;
-
-      predictionDebug.push({
-        eventId,
-        status: "ERROR",
-        httpStatus:
-          error?.status ??
-          null,
-      });
 
       console.error(
         `Prediction error for event ${eventId}:`,
@@ -1081,14 +1098,17 @@ async function buildTopPicks(
 
   /*
    * STEP 3:
-   * Preliminary ranking to select events
-   * for odds enrichment.
+   * Preliminary ranking.
    */
   const rankedPreOdds =
     rankCandidates(
       [...candidates]
     );
 
+  /*
+   * Only enrich the best 30 unique
+   * events with odds.
+   */
   const uniqueEventIds =
     [];
 
@@ -1113,7 +1133,7 @@ async function buildTopPicks(
 
   /*
    * STEP 4:
-   * Real BSD odds.
+   * Real BSD bookmaker odds.
    */
   const oddsMap =
     new Map();
@@ -1168,14 +1188,14 @@ async function buildTopPicks(
    * Attach odds.
    */
   for (const candidate of candidates) {
-    const oddsRowsForEvent =
+    const eventOdds =
       oddsMap.get(
         candidate.eventId
       ) || [];
 
     attachOdds(
       candidate,
-      oddsRowsForEvent
+      eventOdds
     );
   }
 
@@ -1218,12 +1238,14 @@ async function buildTopPicks(
 
     exchange: EXCHANGE,
 
-    /*
-     * IMPORTANT:
-     * predictionsTotal now refers to
-     * actual upcoming fixtures found
-     * by /events/.
-     */
+    eventsDownloaded:
+      eventRows.length,
+
+    eventsFound:
+      validEvents.length,
+
+    eventFilterStats,
+
     predictionsTotal:
       validEvents.length,
 
@@ -1232,8 +1254,6 @@ async function buildTopPicks(
 
     predictionsFound:
       predictionSuccessful,
-
-    eventFilterStats,
 
     predictionStatus: {
       requests:
@@ -1296,7 +1316,7 @@ app.get("/", (req, res) => {
     source: SOURCE,
 
     architecture:
-      "upcoming events -> event prediction -> odds -> ranking",
+      "events -> prediction -> odds -> ranking",
 
     endpoints: [
       "/api/top-picks?date=YYYY-MM-DD",
@@ -1375,6 +1395,14 @@ app.get(
       const rows =
         getRows(data);
 
+      const {
+        accepted,
+        stats,
+      } =
+        filterUpcomingEvents(
+          rows
+        );
+
       res.json({
         version: VERSION,
 
@@ -1385,7 +1413,7 @@ app.get(
         endpoint:
           "/api/v2/events/",
 
-        status:
+        requestedStatus:
           "upcoming",
 
         count:
@@ -1395,33 +1423,38 @@ app.get(
         downloaded:
           rows.length,
 
-        events:
-          rows.map(
-            (event) => ({
-              id:
-                getEventId(
-                  event
-                ),
+        filterStats:
+          stats,
 
-              event:
-                `${getHomeTeam(event)} – ${getAwayTeam(event)}`,
+        acceptedPreview:
+          accepted
+            .slice(0, 30)
+            .map(
+              (event) => ({
+                id:
+                  getEventId(
+                    event
+                  ),
 
-              date:
-                getEventDate(
-                  event
-                ),
+                event:
+                  `${getHomeTeam(event)} – ${getAwayTeam(event)}`,
 
-              status:
-                getEventStatus(
-                  event
-                ),
+                date:
+                  getEventDate(
+                    event
+                  ),
 
-              league:
-                getLeague(
-                  event
-                ),
-            })
-          ),
+                status:
+                  getEventStatus(
+                    event
+                  ),
+
+                league:
+                  getLeague(
+                    event
+                  ),
+              })
+            ),
       });
     } catch (error) {
       res.status(500).json({
