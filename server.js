@@ -5,16 +5,18 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
 const BSD_API_KEY = process.env.BSD_API_KEY;
+
 const BSD_BASE = "https://sports.bzzoiro.com/api/v2";
 const BSD_PUBLIC = "https://sports.bzzoiro.com/api";
 
-const VERSION = "6.9.7";
+const VERSION = "6.9.8";
 const SOURCE = "BSD";
 
 const MAX_TOP_PICKS = 5;
@@ -45,25 +47,34 @@ function safeNumber(value) {
   }
 
   const n = Number(value);
+
   return Number.isFinite(n) ? n : null;
 }
 
 function clamp(value, min = 0, max = 1) {
   const n = safeNumber(value);
-  if (n === null) return null;
+
+  if (n === null) {
+    return null;
+  }
 
   return Math.max(min, Math.min(max, n));
 }
 
 function normalizeProbability(value) {
   const n = safeNumber(value);
-  if (n === null) return null;
+
+  if (n === null) {
+    return null;
+  }
 
   return clamp(n > 1 ? n / 100 : n);
 }
 
 function normalizeDate(value) {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
 
   const d = new Date(value);
 
@@ -93,18 +104,19 @@ function buildHeaders() {
 async function fetchJson(url, options = {}) {
   const controller = new AbortController();
 
-  const timeout = setTimeout(
-    () => controller.abort(),
-    REQUEST_TIMEOUT_MS
-  );
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
 
   try {
     const response = await fetch(url, {
       ...options,
+
       headers: {
         ...buildHeaders(),
         ...(options.headers || {})
       },
+
       signal: controller.signal
     });
 
@@ -115,7 +127,9 @@ async function fetchJson(url, options = {}) {
     try {
       data = text ? JSON.parse(text) : null;
     } catch {
-      data = { raw: text };
+      data = {
+        raw: text
+      };
     }
 
     return {
@@ -128,7 +142,9 @@ async function fetchJson(url, options = {}) {
       ok: false,
       status: 0,
       data: {
-        error: error?.message || "request_failed"
+        error:
+          error?.message ||
+          "request_failed"
       }
     };
   } finally {
@@ -137,7 +153,9 @@ async function fetchJson(url, options = {}) {
 }
 
 function getResults(payload) {
-  if (!payload) return [];
+  if (!payload) {
+    return [];
+  }
 
   if (Array.isArray(payload)) {
     return payload;
@@ -151,7 +169,10 @@ function getResults(payload) {
     return payload.data;
   }
 
-  if (payload.data && Array.isArray(payload.data.results)) {
+  if (
+    payload.data &&
+    Array.isArray(payload.data.results)
+  ) {
     return payload.data.results;
   }
 
@@ -159,7 +180,9 @@ function getResults(payload) {
 }
 
 function getCount(payload) {
-  if (!payload) return null;
+  if (!payload) {
+    return null;
+  }
 
   if (safeNumber(payload.count) !== null) {
     return safeNumber(payload.count);
@@ -328,8 +351,7 @@ function getProbabilities(item) {
       source?.btts_yes ??
       source?.bttsYes ??
       source?.prob_btts_yes ??
-      source?.probability_btts_yes ??
-      source?.btts
+      source?.probability_btts_yes
     ),
 
     bttsNo: normalizeProbability(
@@ -350,20 +372,17 @@ function getOdds(item) {
   return {
     home: safeNumber(
       source?.odds_home ??
-      source?.home_odds ??
-      source?.home
+      source?.home_odds
     ),
 
     draw: safeNumber(
       source?.odds_draw ??
-      source?.draw_odds ??
-      source?.draw
+      source?.draw_odds
     ),
 
     away: safeNumber(
       source?.odds_away ??
-      source?.away_odds ??
-      source?.away
+      source?.away_odds
     ),
 
     over15: safeNumber(
@@ -404,20 +423,21 @@ function getOdds(item) {
 
     bttsYes: safeNumber(
       source?.odds_btts_yes ??
-      source?.btts_yes_odds ??
-      source?.btts_yes
+      source?.btts_yes_odds
     ),
 
     bttsNo: safeNumber(
       source?.odds_btts_no ??
-      source?.btts_no_odds ??
-      source?.btts_no
+      source?.btts_no_odds
     )
   };
 }
 
 function recursiveStrings(value, output = []) {
-  if (value === null || value === undefined) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
     return output;
   }
 
@@ -435,7 +455,10 @@ function recursiveStrings(value, output = []) {
   }
 
   if (typeof value === "object") {
-    for (const [key, val] of Object.entries(value)) {
+    for (
+      const [key, val]
+      of Object.entries(value)
+    ) {
       if (
         typeof val === "string" ||
         typeof val === "number" ||
@@ -459,13 +482,18 @@ function getRecommendationText(item) {
     item?.prediction?.recommendation,
     item?.recommended,
     item?.tip,
-    item?.best_pick
+    item?.best_pick,
+    item?.bestPick,
+    item?.prediction?.recommended
   ];
 
   const strings = [];
 
   for (const candidate of candidates) {
-    recursiveStrings(candidate, strings);
+    recursiveStrings(
+      candidate,
+      strings
+    );
   }
 
   return strings.join(" | ");
@@ -473,7 +501,8 @@ function getRecommendationText(item) {
 
 function getRecommendationFlags(item) {
   const text =
-    getRecommendationText(item).toLowerCase();
+    getRecommendationText(item)
+      .toLowerCase();
 
   return {
     homeDraw:
@@ -489,13 +518,11 @@ function getRecommendationFlags(item) {
 
     home:
       text.includes("home win") ||
-      text.includes("home to win") ||
-      text.includes("win (home)"),
+      text.includes("home to win"),
 
     away:
       text.includes("away win") ||
-      text.includes("away to win") ||
-      text.includes("win (away)"),
+      text.includes("away to win"),
 
     over15:
       text.includes("over 1.5"),
@@ -517,12 +544,10 @@ function getRecommendationFlags(item) {
 
     bttsYes:
       text.includes("both teams to score") ||
-      text.includes("btts yes") ||
-      text.includes("btts: yes"),
+      text.includes("btts yes"),
 
     bttsNo:
-      text.includes("btts no") ||
-      text.includes("btts: no")
+      text.includes("btts no")
   };
 }
 
@@ -542,9 +567,12 @@ function makeCandidate({
   probability,
   odds,
   confidence,
-  priority
+  priority = 0
 }) {
-  const p = normalizeProbability(probability);
+  const p =
+    normalizeProbability(
+      probability
+    );
 
   if (
     p === null ||
@@ -555,46 +583,81 @@ function makeCandidate({
 
   const value =
     validOdds(odds)
-      ? Number((p * odds - 1).toFixed(4))
+      ? p * odds - 1
       : null;
 
-  const probabilityScore = p * 100;
+  const probabilityScore =
+    p * 100;
 
   const confidenceScore =
-    (confidence ?? 0) * 100;
+    confidence !== null
+      ? confidence * 100
+      : 0;
 
   const highConfidenceBonus =
     confidence !== null &&
     confidence >= HIGH_CONFIDENCE
-      ? 12
+      ? 8
       : 0;
 
+  /*
+   * BSD recommendation is useful information,
+   * but it must NOT completely override
+   * the market probability.
+   */
   const recommendationBonus =
-    priority * 4;
+    priority * 2.5;
 
-  const oddsPenalty =
-    validOdds(odds)
-      ? Math.max(0, odds - 2.5) * 2
-      : 4;
-
+  /*
+   * Value is a bonus, never a mandatory filter.
+   */
   const valueBonus =
     value !== null
       ? Math.max(
           -5,
-          Math.min(10, value * 20)
+          Math.min(
+            12,
+            value * 18
+          )
         )
       : 0;
 
+  /*
+   * Slight penalty for very short prices
+   * when we actually know the price.
+   *
+   * This prevents the analyzer from simply
+   * choosing the shortest possible market.
+   */
+  let oddsQualityBonus = 0;
+
+  if (validOdds(odds)) {
+    if (
+      odds >= 1.30 &&
+      odds <= 2.20
+    ) {
+      oddsQualityBonus = 3;
+    }
+
+    if (
+      odds > 2.20 &&
+      odds <= 3.50
+    ) {
+      oddsQualityBonus = 1;
+    }
+  }
+
   const score =
-    probabilityScore * 1.1 +
-    confidenceScore * 0.35 +
+    probabilityScore * 1.0 +
+    confidenceScore * 0.30 +
     highConfidenceBonus +
     recommendationBonus +
-    valueBonus -
-    oddsPenalty;
+    valueBonus +
+    oddsQualityBonus;
 
   return {
-    eventId: eventIdOf(item),
+    eventId:
+      eventIdOf(item),
 
     event:
       `${homeName(item)} – ${awayName(item)}`,
@@ -607,10 +670,13 @@ function makeCandidate({
 
     market,
 
-    pick: label,
+    pick:
+      label,
 
     probability:
-      Number((p * 100).toFixed(1)),
+      Number(
+        (p * 100).toFixed(1)
+      ),
 
     confidence:
       confidence !== null
@@ -621,24 +687,31 @@ function makeCandidate({
 
     odds:
       validOdds(odds)
-        ? Number(odds.toFixed(3))
+        ? Number(
+            odds.toFixed(3)
+          )
         : null,
 
     fairOdds:
-      p > 0
-        ? Number((1 / p).toFixed(3))
-        : null,
+      Number(
+        (1 / p).toFixed(3)
+      ),
 
     value:
       value !== null
-        ? Number((value * 100).toFixed(2))
+        ? Number(
+            (value * 100).toFixed(2)
+          )
         : null,
 
     score:
-      Number(score.toFixed(2)),
+      Number(
+        score.toFixed(2)
+      ),
 
     recommendationSource:
-      getRecommendationText(item) || null,
+      getRecommendationText(item) ||
+      null,
 
     exchange: {
       connected: false,
@@ -663,11 +736,9 @@ function generateCandidates(item) {
   const candidates = [];
 
   /*
-   * 1X / X2
-   *
-   * BSD very frequently publishes "win or draw"
-   * / "avoid defeat" as its primary call.
+   * DOUBLE CHANCE
    */
+
   if (
     probabilities.home !== null &&
     probabilities.draw !== null
@@ -675,17 +746,25 @@ function generateCandidates(item) {
     candidates.push(
       makeCandidate({
         item,
-        market: "DOUBLE_CHANCE",
-        label: "1X – gospodarz lub remis",
+        market:
+          "DOUBLE_CHANCE",
+
+        label:
+          "1X – gospodarz lub remis",
+
         probability:
           probabilities.home +
           probabilities.draw,
-        odds: null,
+
+        odds:
+          null,
+
         confidence,
+
         priority:
           flags.homeDraw
             ? 8
-            : 1
+            : 0
       })
     );
   }
@@ -697,168 +776,280 @@ function generateCandidates(item) {
     candidates.push(
       makeCandidate({
         item,
-        market: "DOUBLE_CHANCE",
-        label: "X2 – remis lub goście",
+        market:
+          "DOUBLE_CHANCE",
+
+        label:
+          "X2 – remis lub goście",
+
         probability:
           probabilities.away +
           probabilities.draw,
-        odds: null,
+
+        odds:
+          null,
+
         confidence,
+
         priority:
           flags.awayDraw
             ? 8
-            : 1
+            : 0
       })
     );
   }
 
+  /*
+   * 1X2
+   */
+
   candidates.push(
     makeCandidate({
       item,
-      market: "1X2",
-      label: "1 – wygrana gospodarzy",
+      market:
+        "1X2",
+
+      label:
+        "1 – wygrana gospodarzy",
+
       probability:
         probabilities.home,
+
       odds:
         odds.home,
+
       confidence,
+
       priority:
-        flags.home ? 4 : 0
+        flags.home
+          ? 5
+          : 0
     })
   );
 
   candidates.push(
     makeCandidate({
       item,
-      market: "1X2",
-      label: "2 – wygrana gości",
+      market:
+        "1X2",
+
+      label:
+        "2 – wygrana gości",
+
       probability:
         probabilities.away,
+
       odds:
         odds.away,
+
       confidence,
+
       priority:
-        flags.away ? 4 : 0
+        flags.away
+          ? 5
+          : 0
     })
   );
+
+  /*
+   * TOTALS
+   *
+   * OVER 1.5 stays fully active.
+   */
 
   candidates.push(
     makeCandidate({
       item,
-      market: "TOTAL",
-      label: "OVER 1.5",
+      market:
+        "TOTAL",
+
+      label:
+        "OVER 1.5",
+
       probability:
         probabilities.over15,
+
       odds:
         odds.over15,
+
       confidence,
+
       priority:
-        flags.over15 ? 5 : 1
+        flags.over15
+          ? 7
+          : 1
     })
   );
 
   candidates.push(
     makeCandidate({
       item,
-      market: "TOTAL",
-      label: "OVER 2.5",
+      market:
+        "TOTAL",
+
+      label:
+        "OVER 2.5",
+
       probability:
         probabilities.over25,
+
       odds:
         odds.over25,
+
       confidence,
+
       priority:
-        flags.over25 ? 4 : 0
+        flags.over25
+          ? 6
+          : 0
     })
   );
 
   candidates.push(
     makeCandidate({
       item,
-      market: "TOTAL",
-      label: "OVER 3.5",
+      market:
+        "TOTAL",
+
+      label:
+        "OVER 3.5",
+
       probability:
         probabilities.over35,
+
       odds:
         odds.over35,
+
       confidence,
+
       priority:
-        flags.over35 ? 3 : 0
+        flags.over35
+          ? 5
+          : 0
     })
   );
 
   candidates.push(
     makeCandidate({
       item,
-      market: "TOTAL",
-      label: "UNDER 1.5",
+      market:
+        "TOTAL",
+
+      label:
+        "UNDER 1.5",
+
       probability:
         probabilities.under15,
+
       odds:
         odds.under15,
+
       confidence,
+
       priority:
-        flags.under15 ? 3 : 0
+        flags.under15
+          ? 5
+          : 0
     })
   );
 
   candidates.push(
     makeCandidate({
       item,
-      market: "TOTAL",
-      label: "UNDER 2.5",
+      market:
+        "TOTAL",
+
+      label:
+        "UNDER 2.5",
+
       probability:
         probabilities.under25,
+
       odds:
         odds.under25,
+
       confidence,
+
       priority:
-        flags.under25 ? 4 : 0
+        flags.under25
+          ? 6
+          : 0
     })
   );
 
   candidates.push(
     makeCandidate({
       item,
-      market: "TOTAL",
-      label: "UNDER 3.5",
+      market:
+        "TOTAL",
+
+      label:
+        "UNDER 3.5",
+
       probability:
         probabilities.under35,
+
       odds:
         odds.under35,
+
       confidence,
+
       priority:
-        flags.under35 ? 5 : 1
+        flags.under35
+          ? 7
+          : 0
     })
   );
+
+  /*
+   * BTTS
+   */
 
   candidates.push(
     makeCandidate({
       item,
-      market: "BTTS",
-      label: "BTTS – TAK",
+      market:
+        "BTTS",
+
+      label:
+        "BTTS – TAK",
+
       probability:
         probabilities.bttsYes,
+
       odds:
         odds.bttsYes,
+
       confidence,
+
       priority:
-        flags.bttsYes ? 4 : 0
+        flags.bttsYes
+          ? 6
+          : 0
     })
   );
 
   candidates.push(
     makeCandidate({
       item,
-      market: "BTTS",
-      label: "BTTS – NIE",
+      market:
+        "BTTS",
+
+      label:
+        "BTTS – NIE",
+
       probability:
         probabilities.bttsNo,
+
       odds:
         odds.bttsNo,
+
       confidence,
+
       priority:
-        flags.bttsNo ? 4 : 0
+        flags.bttsNo
+          ? 6
+          : 0
     })
   );
 
@@ -902,7 +1093,9 @@ async function fetchAllPredictions() {
       total = count;
     }
 
-    if (results.length < pageSize) {
+    if (
+      results.length < pageSize
+    ) {
       break;
     }
 
@@ -935,13 +1128,12 @@ function filterPredictionsByDate(
   predictions,
   date
 ) {
-  return predictions.filter(item => {
-    return (
+  return predictions.filter(
+    item =>
       normalizeDate(
         eventDateOf(item)
       ) === date
-    );
-  });
+  );
 }
 
 async function fetchEventDetails(eventId) {
@@ -949,11 +1141,10 @@ async function fetchEventDetails(eventId) {
     return null;
   }
 
-  const url =
-    `${BSD_BASE}/events/${eventId}/`;
-
   const response =
-    await fetchJson(url);
+    await fetchJson(
+      `${BSD_BASE}/events/${eventId}/`
+    );
 
   if (!response.ok) {
     return null;
@@ -963,7 +1154,9 @@ async function fetchEventDetails(eventId) {
 }
 
 function extractBookmakerCount(data) {
-  if (!data) return null;
+  if (!data) {
+    return null;
+  }
 
   const direct =
     data.bookmakers_count ??
@@ -1000,7 +1193,9 @@ function extractBookmakerCount(data) {
         item?.source;
 
       if (name) {
-        unique.add(String(name));
+        unique.add(
+          String(name)
+        );
       }
     }
 
@@ -1042,13 +1237,17 @@ function findNestedOdds(data) {
       Object.keys(value);
 
     const hasOdd =
-      keys.some(key =>
-        /odd|price|decimal/i.test(key)
+      keys.some(
+        key =>
+          /odd|price|decimal/i.test(
+            key
+          )
       );
 
     if (hasOdd) {
       output.push({
         ...value,
+
         __path:
           path.join(".")
       });
@@ -1203,16 +1402,18 @@ function enrichCandidateFromEvent(
 }
 
 /*
- * FINAL TOP-PICK PRIORITY
+ * 6.9.8 RANKING
  *
- * Small and deliberate change in 6.9.7:
+ * Main principle:
  *
- * When a strong double-chance candidate exists
- * (1X/X2 >= 80%), it gets a clear preference over
- * automatically selecting another high-probability
- * market such as OVER 1.5.
+ * We do NOT force BSD's published call.
+ * We do NOT suppress OVER 1.5.
  *
- * We do NOT lower or change any filters.
+ * We compare all available markets.
+ *
+ * Probability is the strongest component.
+ * Confidence, recommendation and value
+ * are secondary modifiers.
  */
 function finalCandidateScore(
   candidate,
@@ -1221,29 +1422,44 @@ function finalCandidateScore(
   let score =
     candidate.score ?? 0;
 
-  if (
-    candidate.market ===
-      "DOUBLE_CHANCE" &&
-    candidate.probability >= 80
-  ) {
-    score += 18;
-  }
-
   /*
-   * Very strong double chance.
-   * This covers the BSD-style 90%+ calls.
+   * Double chance with 85%+ probability
+   * gets a modest stability bonus.
+   *
+   * It does NOT automatically beat OVER 1.5.
    */
   if (
     candidate.market ===
       "DOUBLE_CHANCE" &&
-    candidate.probability >= 90
+    candidate.probability >= 85
   ) {
-    score += 8;
+    score += 4;
   }
 
   /*
-   * Small diversification bonus.
-   * It never overrides a strong probability difference.
+   * Very high confidence.
+   */
+  if (
+    candidate.confidence !== null &&
+    candidate.confidence >= 90
+  ) {
+    score += 3;
+  }
+
+  /*
+   * BSD recommendation is evidence,
+   * not an instruction.
+   */
+  if (
+    candidate.recommendationSource
+  ) {
+    score += 1.5;
+  }
+
+  /*
+   * Prefer some market diversification,
+   * but never at the expense of a clearly
+   * stronger candidate.
    */
   if (selected.length > 0) {
     const sameMarket =
@@ -1254,9 +1470,9 @@ function finalCandidateScore(
       ).length;
 
     if (sameMarket === 0) {
-      score += 5;
+      score += 3;
     } else if (sameMarket === 1) {
-      score += 2;
+      score += 1;
     }
   }
 
@@ -1268,6 +1484,7 @@ function chooseTopPicks(candidates) {
     [...candidates];
 
   const selected = [];
+
   const usedEvents =
     new Set();
 
@@ -1277,7 +1494,9 @@ function chooseTopPicks(candidates) {
     pool.length
   ) {
     let bestIndex = -1;
-    let bestScore = -Infinity;
+
+    let bestScore =
+      -Infinity;
 
     for (
       let i = 0;
@@ -1291,18 +1510,21 @@ function chooseTopPicks(candidates) {
         candidate.eventId ??
         candidate.event;
 
+      /*
+       * Maximum one market
+       * from one match.
+       */
       if (
         usedEvents.has(eventKey)
       ) {
         continue;
       }
 
-      const confidenceOK =
-        candidate.confidence === null ||
-        candidate.confidence >=
-          MIN_CONFIDENCE * 100;
-
-      if (!confidenceOK) {
+      if (
+        candidate.confidence !== null &&
+        candidate.confidence <
+          MIN_CONFIDENCE * 100
+      ) {
         continue;
       }
 
@@ -1374,6 +1596,10 @@ async function analyze(
     );
   }
 
+  /*
+   * Enrich the strongest candidates
+   * with event-level data.
+   */
   const preliminary =
     [...candidates]
       .sort(
@@ -1419,6 +1645,10 @@ async function analyze(
     await sleep(60);
   }
 
+  /*
+   * Combine enriched and normal
+   * candidates.
+   */
   const combined = [
     ...enriched,
 
@@ -1436,7 +1666,11 @@ async function analyze(
     )
   ];
 
+  /*
+   * Remove exact duplicates.
+   */
   const deduped = [];
+
   const seen =
     new Set();
 
@@ -1455,6 +1689,7 @@ async function analyze(
     }
 
     seen.add(key);
+
     deduped.push(
       candidate
     );
@@ -1466,8 +1701,12 @@ async function analyze(
     );
 
   return {
-    version: VERSION,
-    source: SOURCE,
+    version:
+      VERSION,
+
+    source:
+      SOURCE,
+
     date,
 
     generatedAt:
@@ -1524,17 +1763,23 @@ async function analyze(
       doubleChanceEnabled:
         true,
 
-      eventOddsEnrichment:
+      over15Enabled:
         true,
 
-      strongDoubleChancePriority:
-        true
+      onePickPerEvent:
+        true,
+
+      exchangeDataFabricated:
+        false
     },
 
     topPicks
   };
 }
 
+/*
+ * ROOT
+ */
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
@@ -1545,6 +1790,9 @@ app.get("/", (req, res) => {
   });
 });
 
+/*
+ * HEALTH
+ */
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
@@ -1554,6 +1802,9 @@ app.get("/health", (req, res) => {
   });
 });
 
+/*
+ * EVENTS
+ */
 app.get(
   "/api/events",
   async (req, res) => {
@@ -1578,6 +1829,9 @@ app.get(
   }
 );
 
+/*
+ * ANALYZE
+ */
 app.get(
   "/api/analyze",
   async (req, res) => {
@@ -1602,6 +1856,9 @@ app.get(
   }
 );
 
+/*
+ * TOP PICKS
+ */
 app.get(
   "/api/top-picks",
   async (req, res) => {
@@ -1657,6 +1914,9 @@ app.get(
   }
 );
 
+/*
+ * DEBUG
+ */
 app.get(
   "/api/debug-predictions",
   async (req, res) => {
