@@ -510,6 +510,29 @@ diagnostics
 ODDS
 ========================================================= */
 
+function emptyOdds() {
+return {
+home: null,
+draw: null,
+away: null,
+
+doubleChance1X: null,
+doubleChanceX2: null,
+doubleChance12: null,
+over15: null,
+over25: null,
+over35: null,
+under15: null,
+under25: null,
+under35: null,
+bttsYes: null,
+bttsNo: null,
+rowsCount: 0,
+rawCount: 0
+
+};
+}
+
 function normalizeMarket(row) {
 return normalizeText(
 row.market ??
@@ -672,39 +695,29 @@ return […map.values()];
 }
 
 function parseOddsRows(rawRows) {
+const safeRows =
+Array.isArray(rawRows)
+? rawRows
+: [];
+
 const parsedRows =
-rawRows
+safeRows
 .map(parseOddsRow)
 .filter(Boolean);
 
 const rows =
 selectLatestOdds(parsedRows);
 
-const result = {
-home: null,
-draw: null,
-away: null,
+const result = emptyOdds();
 
-doubleChance1X: null,
-doubleChanceX2: null,
-doubleChance12: null,
-over15: null,
-over25: null,
-over35: null,
-under15: null,
-under25: null,
-under35: null,
-bttsYes: null,
-bttsNo: null,
-rowsCount: rows.length,
-rawCount: rawRows.length
-
-};
+result.rowsCount = rows.length;
+result.rawCount = safeRows.length;
 
 for (const row of rows) {
 const market = row.market;
 const outcome = row.outcome;
 
+/* 1X2 */
 if (
   marketIs(row, [
     "1x2",
@@ -740,6 +753,7 @@ if (
     result.away = row;
   }
 }
+/* Double chance */
 if (
   market.includes("double") ||
   market.includes("double_chance") ||
@@ -765,6 +779,7 @@ if (
     result.doubleChance12 = row;
   }
 }
+/* Over / Under */
 const isOU =
   market.includes("over_under") ||
   market.includes("overunder") ||
@@ -814,6 +829,7 @@ if (isOU) {
     result.under35 = row;
   }
 }
+/* BTTS */
 if (
   market === "btts" ||
   market.includes("btts") ||
@@ -856,8 +872,12 @@ diagnostics
 );
 
 return {
-rawRows: rows,
-parsed: parseOddsRows(rows)
+rawRows: Array.isArray(rows)
+? rows
+: [],
+parsed:
+parseOddsRows(rows) ||
+emptyOdds()
 };
 }
 
@@ -1130,18 +1150,13 @@ const candidates = [];
 
 /*
 
-* 6.6.8 — mikro-poprawka:
-* brak predykcji = pomijamy mecz.
-* Nie próbujemy czytać prediction.home,
-* prediction.draw itd. z null.
+* MICROFIX 6.6.8:
+* zabezpieczenie przed null/undefined
+* zarówno prediction, jak i odds.
     */
-    if (!prediction) {
+    if (!prediction || !odds) {
     return candidates;
     }
-
-if (!odds) {
-return candidates;
-}
 
 /* 1X2 */
 
@@ -1348,45 +1363,6 @@ event,
 prediction,
 diagnostics
 ) {
-/*
-
-* 6.6.8 — jeżeli BSD nie ma predykcji
-* dla tego meczu, nie pobieramy nawet kursów.
-* Mecz jest po prostu pomijany.
-    */
-    if (!prediction) {
-    return {
-    eventId:
-    Number(event.id),
-    home:
-    getTeamName(event, “home”),
-    away:
-    getTeamName(event, “away”),
-    eventDate:
-    event.event_date ||
-    event.date ||
-    null,
-    status:
-    event.status ||
-    null,
-    predictionAvailable: false,
-    prediction: null,
-    oddsAvailable: false,
-    odds: {
-    home: null,
-    draw: null,
-    away: null,
-    over15: null,
-    over25: null,
-    over35: null,
-    bttsYes: null,
-    rowsCount: 0,
-    rawCount: 0
-    },
-    candidates: []
-    };
-    }
-
 const oddsDiagnostics = [];
 
 const oddsResult =
@@ -1394,6 +1370,23 @@ await getOdds(
 event.id,
 oddsDiagnostics
 );
+
+/*
+
+* MICROFIX 6.6.8:
+* nawet gdy BSD zwróci null,
+* analizator dostaje bezpieczny obiekt odds.
+    */
+    const parsedOdds =
+    oddsResult?.parsed ||
+    emptyOdds();
+
+const rawOdds =
+Array.isArray(
+oddsResult?.rawRows
+)
+? oddsResult.rawRows
+: [];
 
 if (diagnostics) {
 diagnostics.push({
@@ -1406,7 +1399,7 @@ const candidates =
 buildCandidates(
 event,
 prediction,
-oddsResult.parsed
+parsedOdds
 );
 
 return {
@@ -1424,85 +1417,89 @@ eventDate:
 status:
   event.status ||
   null,
-predictionAvailable: true,
-prediction: {
-  home:
-    prediction.home,
-  draw:
-    prediction.draw,
-  away:
-    prediction.away,
-  over15:
-    prediction.over15,
-  over25:
-    prediction.over25,
-  over35:
-    prediction.over35,
-  bttsYes:
-    prediction.bttsYes,
-  dnbHome:
-    prediction.dnbHome,
-  score:
-    prediction.mostLikelyScore,
-  confidence:
-    prediction.confidence
-},
+predictionAvailable:
+  Boolean(prediction),
+prediction:
+  prediction
+    ? {
+        home:
+          prediction.home,
+        draw:
+          prediction.draw,
+        away:
+          prediction.away,
+        over15:
+          prediction.over15,
+        over25:
+          prediction.over25,
+        over35:
+          prediction.over35,
+        bttsYes:
+          prediction.bttsYes,
+        dnbHome:
+          prediction.dnbHome,
+        score:
+          prediction.mostLikelyScore,
+        confidence:
+          prediction.confidence
+      }
+    : null,
 oddsAvailable:
-  oddsResult.rawRows.length > 0,
+  rawOdds.length > 0,
 odds: {
   home:
-    oddsResult.parsed.home
+    parsedOdds.home
       ? round(
-          oddsResult.parsed.home.odds,
+          parsedOdds.home.odds,
           3
         )
       : null,
   draw:
-    oddsResult.parsed.draw
+    parsedOdds.draw
       ? round(
-          oddsResult.parsed.draw.odds,
+          parsedOdds.draw.odds,
           3
         )
       : null,
   away:
-    oddsResult.parsed.away
+    parsedOdds.away
       ? round(
-          oddsResult.parsed.away.odds,
+          parsedOdds.away.odds,
           3
         )
       : null,
   over15:
-    oddsResult.parsed.over15
+    parsedOdds.over15
       ? round(
-          oddsResult.parsed.over15.odds,
+          parsedOdds.over15.odds,
           3
         )
       : null,
   over25:
-    oddsResult.parsed.over25
+    parsedOdds.over25
       ? round(
-          oddsResult.parsed.over25.odds,
+          parsedOdds.over25.odds,
           3
         )
       : null,
   over35:
-    oddsResult.parsed.over35
+    parsedOdds.over35
       ? round(
-          oddsResult.parsed.over35.odds,
+          parsedOdds.over35.odds,
           3
         )
       : null,
   bttsYes:
-    oddsResult.parsed.bttsYes
+    parsedOdds.bttsYes
       ? round(
-          oddsResult.parsed.bttsYes.odds,
+          parsedOdds.bttsYes.odds,
           3
         )
       : null,
   rowsCount:
-    oddsResult.parsed.rowsCount,
+    parsedOdds.rowsCount,
   rawCount:
-    oddsResult.parsed.rawCount
+    parsedOdds.rawCount
 },
 candidates
 
@@ -1527,6 +1524,8 @@ date,
 eventDiagnostics
 );
 
+/* UNIQUE EVENTS */
+
 const eventMap =
 new Map();
 
@@ -1545,6 +1544,8 @@ eventMap.set(
 const allEvents =
 […eventMap.values()];
 
+/* UPCOMING */
+
 const upcomingEvents =
 allEvents.filter(
 (event) =>
@@ -1553,6 +1554,8 @@ event,
 date
 )
 );
+
+/* CHRONOLOGICAL */
 
 upcomingEvents.sort(
 (a, b) => {
@@ -1582,6 +1585,8 @@ upcomingEvents.slice(
 MAX_EVENTS_TO_ANALYZE
 );
 
+/* PREDICTIONS */
+
 const rawPredictions =
 await getAllPredictions(
 predictionDiagnostics
@@ -1609,6 +1614,8 @@ if (
 
 }
 
+/* EVENTS */
+
 const analyzed = [];
 
 for (
@@ -1629,11 +1636,18 @@ analyzed.push(result);
 
 }
 
+/* ALL CANDIDATES */
+
 const allCandidates =
 analyzed.flatMap(
 (item) =>
 item.candidates || []
 );
+
+/*
+
+* Jedna propozycja z jednego meczu.
+    */
 
 const bestByEvent =
 new Map();
@@ -1659,6 +1673,11 @@ if (
 
 }
 
+/*
+
+* Ranking końcowy.
+    */
+
 const qualifiedCandidates =
 […bestByEvent.values()]
 .sort(
@@ -1666,6 +1685,12 @@ const qualifiedCandidates =
 b.rankingScore -
 a.rankingScore
 );
+
+/*
+
+* MAX 5.
+* Nie uzupełniamy sztucznie.
+    */
 
 const topPicks =
 qualifiedCandidates
@@ -1950,167 +1975,176 @@ req.query.eventId
       eventId,
       diagnostics
     );
+  const parsed =
+    result?.parsed ||
+    emptyOdds();
+  const rawRows =
+    Array.isArray(
+      result?.rawRows
+    )
+      ? result.rawRows
+      : [];
   res.json({
     version: VERSION,
     eventId,
     rawCount:
-      result.rawRows.length,
+      rawRows.length,
     parsed: {
       home:
-        result.parsed.home
+        parsed.home
           ? {
               odds:
-                result.parsed
+                parsed
                   .home
                   .odds,
               previousOdds:
-                result.parsed
+                parsed
                   .home
                   .previousOdds,
               openingOdds:
-                result.parsed
+                parsed
                   .home
                   .openingOdds,
               movement:
-                result.parsed
+                parsed
                   .home
                   .movement
             }
           : null,
       draw:
-        result.parsed.draw
+        parsed.draw
           ? {
               odds:
-                result.parsed
+                parsed
                   .draw
                   .odds,
               previousOdds:
-                result.parsed
+                parsed
                   .draw
                   .previousOdds,
               openingOdds:
-                result.parsed
+                parsed
                   .draw
                   .openingOdds,
               movement:
-                result.parsed
+                parsed
                   .draw
                   .movement
             }
           : null,
       away:
-        result.parsed.away
+        parsed.away
           ? {
               odds:
-                result.parsed
+                parsed
                   .away
                   .odds,
               previousOdds:
-                result.parsed
+                parsed
                   .away
                   .previousOdds,
               openingOdds:
-                result.parsed
+                parsed
                   .away
                   .openingOdds,
               movement:
-                result.parsed
+                parsed
                   .away
                   .movement
             }
           : null,
       over15:
-        result.parsed.over15
+        parsed.over15
           ? {
               odds:
-                result.parsed
+                parsed
                   .over15
                   .odds,
               previousOdds:
-                result.parsed
+                parsed
                   .over15
                   .previousOdds,
               openingOdds:
-                result.parsed
+                parsed
                   .over15
                   .openingOdds,
               movement:
-                result.parsed
+                parsed
                   .over15
                   .movement,
               line:
-                result.parsed
+                parsed
                   .over15
                   .line
             }
           : null,
       over25:
-        result.parsed.over25
+        parsed.over25
           ? {
               odds:
-                result.parsed
+                parsed
                   .over25
                   .odds,
               previousOdds:
-                result.parsed
+                parsed
                   .over25
                   .previousOdds,
               openingOdds:
-                result.parsed
+                parsed
                   .over25
                   .openingOdds,
               movement:
-                result.parsed
+                parsed
                   .over25
                   .movement,
               line:
-                result.parsed
+                parsed
                   .over25
                   .line
             }
           : null,
       over35:
-        result.parsed.over35
+        parsed.over35
           ? {
               odds:
-                result.parsed
+                parsed
                   .over35
                   .odds,
               previousOdds:
-                result.parsed
+                parsed
                   .over35
                   .previousOdds,
               openingOdds:
-                result.parsed
+                parsed
                   .over35
                   .openingOdds,
               movement:
-                result.parsed
+                parsed
                   .over35
                   .movement,
               line:
-                result.parsed
+                parsed
                   .over35
                   .line
             }
           : null,
       bttsYes:
-        result.parsed.bttsYes
+        parsed.bttsYes
           ? {
               odds:
-                result.parsed
+                parsed
                   .bttsYes
                   .odds,
               previousOdds:
-                result.parsed
+                parsed
                   .bttsYes
                   .previousOdds,
               openingOdds:
-                result.parsed
+                parsed
                   .bttsYes
                   .openingOdds,
               movement:
-                result.parsed
+                parsed
                   .bttsYes
                   .movement
             }
