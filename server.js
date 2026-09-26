@@ -3083,49 +3083,68 @@ app.get(
 
 app.get(
   "/api/debug-predictions",
-  async (
-    req,
-    res
-  ) => {
-    try {
-      const predictions =
-        await getAllPredictions();
+  async (req, res) => {
+    const results = [];
 
-      res.json({
-        version:
-          VERSION,
+    const urls = [
+      `${BSD_BASE}/predictions/?limit=5&offset=0`,
+      `${BSD_BASE}/predictions/?upcoming=true&limit=5&offset=0`,
+      `${BSD_PUBLIC_BASE}/predictions/?limit=5&offset=0`,
+      `${BSD_PUBLIC_BASE}/predictions/?upcoming=true&limit=5&offset=0`
+    ];
 
-        source:
-          SOURCE,
+    for (const url of urls) {
+      try {
+        const controller = new AbortController();
 
-        count:
-          predictions.length,
+        const timeout = setTimeout(() => {
+          controller.abort();
+        }, 15000);
 
-        predictions
-      });
-    } catch (
-      error
-    ) {
-      res.status(
-        error.status ||
-          500
-      ).json({
-        status:
-          "error",
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            Authorization: `Token ${BSD_API_KEY}`,
+            Accept: "application/json"
+          },
+          signal: controller.signal
+        });
 
-        version:
-          VERSION,
+        clearTimeout(timeout);
 
-        source:
-          SOURCE,
+        const text = await response.text();
 
-        message:
-          error.message
-      });
+        let body;
+
+        try {
+          body = JSON.parse(text);
+        } catch {
+          body = text.slice(0, 1000);
+        }
+
+        results.push({
+          url: url.replace(BSD_API_KEY || "", "***"),
+          status: response.status,
+          ok: response.ok,
+          contentType:
+            response.headers.get("content-type"),
+          body
+        });
+      } catch (error) {
+        results.push({
+          url: url.replace(BSD_API_KEY || "", "***"),
+          error: error.message
+        });
+      }
     }
+
+    res.json({
+      version: VERSION,
+      source: SOURCE,
+      results
+    });
   }
 );
-
 app.listen(
   PORT,
   () => {
