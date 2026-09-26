@@ -1,6 +1,7 @@
 {
-  "name": "bet-analyzer-backend",
-  "version": "7.1.6",
+  "name": "bet-analyzer-live",
+  "version": "4.3.2",
+  "private": true,
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -10,8 +11,8 @@
     "node": ">=20"
   },
   "dependencies": {
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
     "express": "^5.1.0"
   }
 }
