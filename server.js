@@ -13,45 +13,31 @@ const PORT = process.env.PORT || 10000;
 
 const BSD_API_KEY = process.env.BSD_API_KEY;
 const BSD_BASE = "https://sports.bzzoiro.com/api/v2";
-const BSD_PUBLIC = "https://sports.bzzoiro.com/api";
 
-const VERSION = "7.0.5";
+const VERSION = "7.0.6";
 const SOURCE = "BSD";
 
-const authHeaders = () => ({
+const headers = {
   Authorization: `Token ${BSD_API_KEY}`,
   Accept: "application/json",
-});
+};
 
-function numberOrNull(value) {
-  const n = Number(value);
+function num(v) {
+  const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
 
-function percent(value) {
-  const n = numberOrNull(value);
+function confidencePercent(v) {
+  const n = num(v);
 
   if (n === null) return null;
 
   return n <= 1 ? n * 100 : n;
 }
 
-function firstDefined(...values) {
-  for (const value of values) {
-    if (
-      value !== undefined &&
-      value !== null
-    ) {
-      return value;
-    }
-  }
-
-  return null;
-}
-
-async function fetchJson(url) {
+async function getJson(url) {
   const response = await fetch(url, {
-    headers: authHeaders(),
+    headers,
   });
 
   let body = null;
@@ -73,43 +59,15 @@ async function fetchJson(url) {
    PREDICTIONS
    ========================================================= */
 
-function extractPredictions(body) {
-  if (Array.isArray(body?.results)) {
-    return body.results;
-  }
-
-  if (Array.isArray(body?.data)) {
-    return body.data;
-  }
-
-  if (Array.isArray(body?.predictions)) {
-    return body.predictions;
-  }
-
-  if (Array.isArray(body)) {
-    return body;
-  }
-
-  return [];
-}
-
-/*
- * IMPORTANT:
- * BSD supports date_from/date_to on predictions.
- *
- * We now ask BSD directly for the requested date
- * instead of downloading everything and trying to
- * infer the date locally.
- */
-async function fetchPredictionsForDate(date) {
+async function fetchPredictions(date) {
   const url =
-    `${BSD_PUBLIC}/predictions/` +
+    `${BSD_BASE}/predictions/` +
     `?date_from=${encodeURIComponent(date)}` +
     `&date_to=${encodeURIComponent(date)}` +
     `&limit=200` +
     `&offset=0`;
 
-  const result = await fetchJson(url);
+  const result = await getJson(url);
 
   if (!result.ok) {
     throw new Error(
@@ -117,675 +75,756 @@ async function fetchPredictionsForDate(date) {
     );
   }
 
-  const rows =
-    extractPredictions(result.body);
+  const rows = Array.isArray(result.body?.results)
+    ? result.body.results
+    : Array.isArray(result.body)
+      ? result.body
+      : [];
 
   return {
     rows,
     total:
-      numberOrNull(
-        result.body?.count
-      ) ?? rows.length,
+      num(result.body?.count) ??
+      rows.length,
   };
 }
 
 /* =========================================================
-   PROBABILITIES
+   BSD PREDICTION SCHEMA
    ========================================================= */
 
-function getProbability(row, market) {
-  const p =
-    row?.probabilities ??
-    row?.prediction ??
-    row?.probs ??
-    {};
+function predictionMarkets(row) {
+  return (
+    row?.markets ??
+    row?.prediction?.markets ??
+    {}
+  );
+}
 
-  const aliases = {
-    home: [
-      "home",
-      "home_win",
-      "1",
-    ],
+function probability(row, type) {
+  const markets =
+    predictionMarkets(row);
 
-    draw: [
-      "draw",
-      "x",
-    ],
-
-    away: [
-      "away",
-      "away_win",
-      "2",
-    ],
-
-    over15: [
-      "over_15",
-      "over15",
-      "over_1_5",
-      "over_15_goals",
-    ],
-
-    under15: [
-      "under_15",
-      "under15",
-      "under_1_5",
-      "under_15_goals",
-    ],
-
-    over25: [
-      "over_25",
-      "over25",
-      "over_2_5",
-      "over_25_goals",
-    ],
-
-    under25: [
-      "under_25",
-      "under25",
-      "under_2_5",
-      "under_25_goals",
-    ],
-
-    over35: [
-      "over_35",
-      "over35",
-      "over_3_5",
-      "over_35_goals",
-    ],
-
-    under35: [
-      "under_35",
-      "under35",
-      "under_3_5",
-      "under_35_goals",
-    ],
-
-    bttsYes: [
-      "btts_yes",
-      "bttsYes",
-      "yes",
-    ],
-
-    bttsNo: [
-      "btts_no",
-      "bttsNo",
-      "no",
-    ],
-  };
-
-  for (
-    const key of
-    aliases[market] || []
-  ) {
-    const value =
-      percent(
-        p?.[key] ??
-        row?.[key]
+  switch (type) {
+    case "HOME":
+      return num(
+        markets?.match_result?.prob_home
       );
 
-    if (value !== null) {
-      return value;
-    }
-  }
+    case "DRAW":
+      return num(
+        markets?.match_result?.prob_draw
+      );
 
-  return null;
+    case "AWAY":
+      return num(
+        markets?.match_result?.prob_away
+      );
+
+    case "OVER15":
+      return num(
+        markets?.over_under?.prob_over_15
+      );
+
+    case "UNDER15":
+      return (
+        num(
+          markets?.over_under?.prob_under_15
+        ) ??
+        (
+          (() => {
+            const over =
+              num(
+                markets?.over_under
+                  ?.prob_over_15
+              );
+
+            return over === null
+              ? null
+              : 100 - over;
+          })()
+        )
+      );
+
+    case "OVER25":
+      return num(
+        markets?.over_under?.prob_over_25
+      );
+
+    case "UNDER25":
+      return (
+        num(
+          markets?.over_under?.prob_under_25
+        ) ??
+        (
+          (() => {
+            const over =
+              num(
+                markets?.over_under
+                  ?.prob_over_25
+              );
+
+            return over === null
+              ? null
+              : 100 - over;
+          })()
+        )
+      );
+
+    case "OVER35":
+      return num(
+        markets?.over_under?.prob_over_35
+      );
+
+    case "UNDER35":
+      return (
+        num(
+          markets?.over_under
+            ?.prob_under_35
+        ) ??
+        (
+          (() => {
+            const over =
+              num(
+                markets?.over_under
+                  ?.prob_over_35
+              );
+
+            return over === null
+              ? null
+              : 100 - over;
+          })()
+        )
+      );
+
+    case "BTTSYES":
+      return num(
+        markets?.btts?.prob_yes
+      );
+
+    case "BTTSNO":
+      return (
+        num(
+          markets?.btts?.prob_no
+        ) ??
+        (
+          (() => {
+            const yes =
+              num(
+                markets?.btts?.prob_yes
+              );
+
+            return yes === null
+              ? null
+              : 100 - yes;
+          })()
+        )
+      );
+
+    default:
+      return null;
+  }
+}
+
+/* =========================================================
+   EVENT INFORMATION
+   ========================================================= */
+
+function eventInfo(row) {
+  const event =
+    row?.event ??
+    {};
+
+  return {
+    eventId:
+      event?.id ??
+      row?.event_id ??
+      row?.eventId ??
+      row?.id ??
+      null,
+
+    home:
+      event?.home_team ??
+      row?.home_team ??
+      row?.home ??
+      "",
+
+    away:
+      event?.away_team ??
+      row?.away_team ??
+      row?.away ??
+      "",
+
+    date:
+      event?.event_date ??
+      event?.date ??
+      event?.kickoff_at ??
+      row?.event_date ??
+      row?.date ??
+      null,
+
+    league:
+      event?.league?.name ??
+      event?.league_name ??
+      row?.league?.name ??
+      row?.league_name ??
+      null,
+
+    status:
+      event?.status ??
+      row?.status ??
+      "notstarted",
+  };
 }
 
 /* =========================================================
    CANDIDATES
    ========================================================= */
 
-function getTeamName(
-  row,
-  side
+function candidate(
+  info,
+  market,
+  pick,
+  probabilityValue,
+  confidence
 ) {
-  if (side === "home") {
-    return (
-      row?.home_team?.name ??
-      row?.home?.name ??
-      row?.home ??
-      row?.home_name ??
-      ""
-    );
+  if (
+    probabilityValue === null ||
+    probabilityValue === undefined
+  ) {
+    return null;
   }
 
-  return (
-    row?.away_team?.name ??
-    row?.away?.name ??
-    row?.away ??
-    row?.away_name ??
-    ""
-  );
-}
+  const probabilityRounded =
+    Math.round(
+      probabilityValue * 10
+    ) / 10;
 
-function getEventId(row) {
-  return (
-    row?.event_id ??
-    row?.eventId ??
-    row?.event?.id ??
-    row?.id
-  );
-}
+  const fairOdds =
+    probabilityRounded > 0
+      ? Math.round(
+          (100 /
+            probabilityRounded) *
+          1000
+        ) / 1000
+      : null;
 
-function getEventDate(row) {
-  return (
-    row?.event_date ??
-    row?.eventDate ??
-    row?.date ??
-    row?.kickoff_at ??
-    row?.event?.event_date ??
-    row?.event?.date ??
-    row?.event?.kickoff_at ??
-    null
-  );
-}
+  /*
+   * EXISTING MODEL SCORING.
+   * DO NOT CHANGE WEIGHTS.
+   */
+  const score =
+    probabilityRounded +
+    (confidence ?? 0) * 0.18;
 
-function getLeague(row) {
-  return (
-    row?.league?.name ??
-    row?.league_name ??
-    row?.competition?.name ??
-    row?.league ??
-    null
-  );
+  return {
+    eventId:
+      info.eventId,
+
+    event:
+      `${info.home} – ${info.away}`,
+
+    home:
+      info.home,
+
+    away:
+      info.away,
+
+    date:
+      info.date,
+
+    league:
+      info.league,
+
+    market,
+
+    pick,
+
+    marketKey:
+      pick
+        .replace(
+          /[^A-Z0-9]+/gi,
+          ""
+        )
+        .toUpperCase(),
+
+    probability:
+      probabilityRounded,
+
+    confidence,
+
+    odds: null,
+
+    fairOdds,
+
+    value: null,
+
+    recommendationStrength: 0,
+
+    bsdRecommendation:
+      null,
+
+    score,
+
+    oddsSource:
+      "UNAVAILABLE",
+
+    bookmaker:
+      null,
+
+    marketMovement:
+      null,
+
+    exchangeMovement:
+      null,
+
+    status:
+      info.status,
+  };
 }
 
 function buildCandidates(row) {
-  const home =
-    getTeamName(row, "home");
-
-  const away =
-    getTeamName(row, "away");
-
-  const eventId =
-    getEventId(row);
-
-  const date =
-    getEventDate(row);
-
-  const league =
-    getLeague(row);
+  const info =
+    eventInfo(row);
 
   const confidence =
-    percent(
+    confidencePercent(
+      row?.model?.confidence ??
       row?.confidence ??
-      row?.model_confidence
+      null
     );
 
-  const homeProbability =
-    getProbability(
+  const list = [];
+
+  const home =
+    probability(
       row,
-      "home"
+      "HOME"
     );
 
-  const drawProbability =
-    getProbability(
+  const draw =
+    probability(
       row,
-      "draw"
+      "DRAW"
     );
 
-  const awayProbability =
-    getProbability(
+  const away =
+    probability(
       row,
-      "away"
+      "AWAY"
+    );
+
+  const over15 =
+    probability(
+      row,
+      "OVER15"
+    );
+
+  const under15 =
+    probability(
+      row,
+      "UNDER15"
+    );
+
+  const over25 =
+    probability(
+      row,
+      "OVER25"
+    );
+
+  const under25 =
+    probability(
+      row,
+      "UNDER25"
+    );
+
+  const over35 =
+    probability(
+      row,
+      "OVER35"
+    );
+
+  const under35 =
+    probability(
+      row,
+      "UNDER35"
+    );
+
+  const bttsYes =
+    probability(
+      row,
+      "BTTSYES"
+    );
+
+  const bttsNo =
+    probability(
+      row,
+      "BTTSNO"
     );
 
   const markets = [
-    {
-      market:
-        "DOUBLE_CHANCE",
+    [
+      "DOUBLE_CHANCE",
+      "1X",
+      home !== null &&
+      draw !== null
+        ? home + draw
+        : null,
+    ],
 
-      pick:
-        "1X",
+    [
+      "DOUBLE_CHANCE",
+      "X2",
+      away !== null &&
+      draw !== null
+        ? away + draw
+        : null,
+    ],
 
-      probability:
-        homeProbability !== null &&
-        drawProbability !== null
-          ? homeProbability +
-            drawProbability
-          : null,
-    },
+    [
+      "1X2",
+      "1",
+      home,
+    ],
 
-    {
-      market:
-        "DOUBLE_CHANCE",
+    [
+      "1X2",
+      "X",
+      draw,
+    ],
 
-      pick:
-        "X2",
+    [
+      "1X2",
+      "2",
+      away,
+    ],
 
-      probability:
-        awayProbability !== null &&
-        drawProbability !== null
-          ? awayProbability +
-            drawProbability
-          : null,
-    },
+    [
+      "TOTAL",
+      "OVER 1.5",
+      over15,
+    ],
 
-    {
-      market:
-        "1X2",
+    [
+      "TOTAL",
+      "UNDER 1.5",
+      under15,
+    ],
 
-      pick:
-        "1",
+    [
+      "TOTAL",
+      "OVER 2.5",
+      over25,
+    ],
 
-      probability:
-        homeProbability,
-    },
+    [
+      "TOTAL",
+      "UNDER 2.5",
+      under25,
+    ],
 
-    {
-      market:
-        "1X2",
+    [
+      "TOTAL",
+      "OVER 3.5",
+      over35,
+    ],
 
-      pick:
-        "X",
+    [
+      "TOTAL",
+      "UNDER 3.5",
+      under35,
+    ],
 
-      probability:
-        drawProbability,
-    },
+    [
+      "BTTS",
+      "BTTS YES",
+      bttsYes,
+    ],
 
-    {
-      market:
-        "1X2",
-
-      pick:
-        "2",
-
-      probability:
-        awayProbability,
-    },
-
-    {
-      market:
-        "TOTAL",
-
-      pick:
-        "OVER 1.5",
-
-      probability:
-        getProbability(
-          row,
-          "over15"
-        ),
-    },
-
-    {
-      market:
-        "TOTAL",
-
-      pick:
-        "UNDER 1.5",
-
-      probability:
-        getProbability(
-          row,
-          "under15"
-        ),
-    },
-
-    {
-      market:
-        "TOTAL",
-
-      pick:
-        "OVER 2.5",
-
-      probability:
-        getProbability(
-          row,
-          "over25"
-        ),
-    },
-
-    {
-      market:
-        "TOTAL",
-
-      pick:
-        "UNDER 2.5",
-
-      probability:
-        getProbability(
-          row,
-          "under25"
-        ),
-    },
-
-    {
-      market:
-        "TOTAL",
-
-      pick:
-        "OVER 3.5",
-
-      probability:
-        getProbability(
-          row,
-          "over35"
-        ),
-    },
-
-    {
-      market:
-        "TOTAL",
-
-      pick:
-        "UNDER 3.5",
-
-      probability:
-        getProbability(
-          row,
-          "under35"
-        ),
-    },
-
-    {
-      market:
-        "BTTS",
-
-      pick:
-        "BTTS YES",
-
-      probability:
-        getProbability(
-          row,
-          "bttsYes"
-        ),
-    },
-
-    {
-      market:
-        "BTTS",
-
-      pick:
-        "BTTS NO",
-
-      probability:
-        getProbability(
-          row,
-          "bttsNo"
-        ),
-    },
+    [
+      "BTTS",
+      "BTTS NO",
+      bttsNo,
+    ],
   ];
 
-  return markets
-    .filter(
-      (item) =>
-        item.probability !== null
-    )
-    .map((item) => {
-      const probability =
-        Math.round(
-          item.probability * 10
-        ) / 10;
-
-      const fairOdds =
-        probability > 0
-          ? Math.round(
-              (100 / probability) *
-              1000
-            ) / 1000
-          : null;
-
-      /*
-       * EXISTING SCORE.
-       * NO WEIGHT SYSTEM CHANGE.
-       */
-      const score =
-        probability +
-        (confidence ?? 0) * 0.18;
-
-      return {
-        eventId,
-
-        event:
-          `${home} – ${away}`,
-
-        home,
-        away,
-
-        date,
-        league,
-
-        market:
-          item.market,
-
-        pick:
-          item.pick,
-
-        marketKey:
-          item.pick
-            .replace(
-              /[^A-Z0-9]+/gi,
-              ""
-            )
-            .toUpperCase(),
-
-        probability,
-
-        confidence,
-
-        odds: null,
-
-        fairOdds,
-
-        value: null,
-
-        recommendationStrength:
-          0,
-
-        bsdRecommendation:
-          row?.recommendation ??
-          row?.recommended ??
-          null,
-
-        score,
-
-        oddsSource:
-          "UNAVAILABLE",
-
-        bookmaker:
-          null,
-
-        marketMovement:
-          null,
-
-        exchangeMovement:
-          null,
-
-        status:
-          row?.status ??
-          "notstarted",
-      };
-    });
-}
-
-/* =========================================================
-   ODDS PARSER
-   ========================================================= */
-
-function normalizeEventOdds(body) {
-  /*
-   * BSD can expose the odds block directly,
-   * or under body.odds / body.data.odds.
-   */
-  const source =
-    body?.odds ??
-    body?.data?.odds ??
-    body?.result?.odds ??
-    body;
-
-  if (
-    !source ||
-    typeof source !== "object"
+  for (
+    const [
+      market,
+      pick,
+      p,
+    ] of markets
   ) {
-    return {};
+    const item =
+      candidate(
+        info,
+        market,
+        pick,
+        p,
+        confidence
+      );
+
+    if (item) {
+      list.push(item);
+    }
   }
 
-  const matchWinner =
-    source.match_winner ??
-    source.matchWinner ??
-    {};
-
-  const overUnder =
-    source.over_under ??
-    source.overUnder ??
-    {};
-
-  const btts =
-    source.btts ??
-    {};
-
-  return {
-    "1":
-      numberOrNull(
-        firstDefined(
-          source.home_win,
-          source.home,
-          matchWinner.home
-        )
-      ),
-
-    "X":
-      numberOrNull(
-        firstDefined(
-          source.draw,
-          matchWinner.draw
-        )
-      ),
-
-    "2":
-      numberOrNull(
-        firstDefined(
-          source.away_win,
-          source.away,
-          matchWinner.away
-        )
-      ),
-
-    OVER15:
-      numberOrNull(
-        firstDefined(
-          source.over_15_goals,
-          source.over_15,
-          source.over15,
-          overUnder.over_15,
-          overUnder.over15
-        )
-      ),
-
-    UNDER15:
-      numberOrNull(
-        firstDefined(
-          source.under_15_goals,
-          source.under_15,
-          source.under15,
-          overUnder.under_15,
-          overUnder.under15
-        )
-      ),
-
-    OVER25:
-      numberOrNull(
-        firstDefined(
-          source.over_25_goals,
-          source.over_25,
-          source.over25,
-          overUnder.over_25,
-          overUnder.over25
-        )
-      ),
-
-    UNDER25:
-      numberOrNull(
-        firstDefined(
-          source.under_25_goals,
-          source.under_25,
-          source.under25,
-          overUnder.under_25,
-          overUnder.under25
-        )
-      ),
-
-    OVER35:
-      numberOrNull(
-        firstDefined(
-          source.over_35_goals,
-          source.over_35,
-          source.over35,
-          overUnder.over_35,
-          overUnder.over35
-        )
-      ),
-
-    UNDER35:
-      numberOrNull(
-        firstDefined(
-          source.under_35_goals,
-          source.under_35,
-          source.under35,
-          overUnder.under_35,
-          overUnder.under35
-        )
-      ),
-
-    BTTSYES:
-      numberOrNull(
-        firstDefined(
-          source.btts_yes,
-          btts.yes
-        )
-      ),
-
-    BTTSNO:
-      numberOrNull(
-        firstDefined(
-          source.btts_no,
-          btts.no
-        )
-      ),
-  };
+  return list;
 }
 
 /* =========================================================
-   EVENT ODDS
+   ODDS FEED
    ========================================================= */
 
-async function fetchEventOdds(
+function extractOddsRows(body) {
+  if (
+    Array.isArray(
+      body?.results
+    )
+  ) {
+    return body.results;
+  }
+
+  if (
+    Array.isArray(
+      body?.data
+    )
+  ) {
+    return body.data;
+  }
+
+  if (
+    Array.isArray(body)
+  ) {
+    return body;
+  }
+
+  return [];
+}
+
+function oddsMarketKey(
+  row
+) {
+  const market =
+    String(
+      row?.market ??
+      ""
+    ).toLowerCase();
+
+  const outcome =
+    String(
+      row?.outcome ??
+      ""
+    ).toUpperCase();
+
+  if (
+    market === "1x2"
+  ) {
+    if (outcome === "HOME")
+      return "1";
+
+    if (outcome === "DRAW")
+      return "X";
+
+    if (outcome === "AWAY")
+      return "2";
+  }
+
+  if (
+    market ===
+    "double_chance"
+  ) {
+    if (outcome === "1X")
+      return "1X";
+
+    if (outcome === "X2")
+      return "X2";
+  }
+
+  if (
+    market ===
+    "over_under_15"
+  ) {
+    if (
+      outcome.toLowerCase() ===
+      "over"
+    )
+      return "OVER15";
+
+    if (
+      outcome.toLowerCase() ===
+      "under"
+    )
+      return "UNDER15";
+  }
+
+  if (
+    market ===
+    "over_under_25"
+  ) {
+    if (
+      outcome.toLowerCase() ===
+      "over"
+    )
+      return "OVER25";
+
+    if (
+      outcome.toLowerCase() ===
+      "under"
+    )
+      return "UNDER25";
+  }
+
+  if (
+    market ===
+    "over_under_35"
+  ) {
+    if (
+      outcome.toLowerCase() ===
+      "over"
+    )
+      return "OVER35";
+
+    if (
+      outcome.toLowerCase() ===
+      "under"
+    )
+      return "UNDER35";
+  }
+
+  if (
+    market === "btts"
+  ) {
+    if (
+      outcome.toLowerCase() ===
+      "yes"
+    )
+      return "BTTSYES";
+
+    if (
+      outcome.toLowerCase() ===
+      "no"
+    )
+      return "BTTSNO";
+  }
+
+  return null;
+}
+
+function parseOdds(
+  body
+) {
+  const rows =
+    extractOddsRows(
+      body
+    );
+
+  const markets =
+    {};
+
+  for (
+    const row
+    of rows
+  ) {
+    const key =
+      oddsMarketKey(
+        row
+      );
+
+    if (!key) {
+      continue;
+    }
+
+    const decimalOdds =
+      num(
+        row?.decimal_odds ??
+        row?.odds ??
+        row?.price
+      );
+
+    if (
+      decimalOdds === null
+    ) {
+      continue;
+    }
+
+    /*
+     * Prefer the current best quote.
+     * If BSD returns several bookmakers,
+     * is_max_quote identifies the best one.
+     */
+    const current =
+      markets[key];
+
+    if (
+      !current ||
+      row?.is_max_quote === true ||
+      decimalOdds >
+        current.odds
+    ) {
+      markets[key] = {
+        odds:
+          decimalOdds,
+
+        bookmaker:
+          row?.bookmaker_name ??
+          row?.bookmaker_slug ??
+          row?.bookmaker ??
+          "Consensus",
+
+        movement:
+          row?.movement ??
+          null,
+
+        previousOdds:
+          num(
+            row?.previous_decimal_odds
+          ),
+
+        updatedAt:
+          row?.updated_at ??
+          null,
+      };
+    }
+  }
+
+  return {
+    markets,
+    rowsCount:
+      rows.length,
+  };
+}
+
+async function fetchOdds(
   eventId
 ) {
-  const endpoint =
-    `${BSD_BASE}/events/${eventId}/odds/`;
+  const url =
+    `${BSD_BASE}/odds/` +
+    `?event_id=${encodeURIComponent(
+      eventId
+    )}` +
+    `&limit=200` +
+    `&offset=0`;
 
   const result =
-    await fetchJson(endpoint);
+    await getJson(url);
 
   return {
-    endpoint,
-
     ...result,
 
-    odds:
+    endpoint:
+      `${BSD_BASE}/odds/`,
+
+    parsed:
       result.ok
-        ? normalizeEventOdds(
+        ? parseOdds(
             result.body
           )
-        : {},
+        : {
+            markets: {},
+            rowsCount: 0,
+          },
   };
-}
-
-/* =========================================================
-   MARKET KEY
-   ========================================================= */
-
-function marketKeyFromPick(
-  pick
-) {
-  return pick
-    .replace(
-      /[^A-Z0-9]+/gi,
-      ""
-    )
-    .toUpperCase();
 }
 
 /* =========================================================
@@ -793,54 +832,53 @@ function marketKeyFromPick(
    ========================================================= */
 
 function applyOdds(
-  candidate,
-  oddsData
+  item,
+  odds
 ) {
   const key =
-    marketKeyFromPick(
-      candidate.pick
-    );
+    item.marketKey;
 
-  const odds =
-    oddsData[key] ??
-    null;
+  const market =
+    odds.markets?.[key];
 
-  candidate.odds =
-    odds;
+  if (!market) {
+    return item;
+  }
 
-  candidate.fairOdds =
-    candidate.probability > 0
+  item.odds =
+    market.odds;
+
+  item.bookmaker =
+    market.bookmaker;
+
+  item.oddsSource =
+    "BSD_BEST_AVAILABLE";
+
+  item.marketMovement =
+    market.movement;
+
+  item.fairOdds =
+    item.probability > 0
       ? Math.round(
           (100 /
-            candidate.probability) *
+            item.probability) *
           1000
         ) / 1000
       : null;
 
-  candidate.value =
-    odds !== null &&
-    candidate.probability !== null
+  item.value =
+    item.odds !== null &&
+    item.fairOdds !== null
       ? Math.round(
           (
-            odds *
-              (candidate.probability /
-                100) -
+            item.odds /
+              item.fairOdds -
             1
           ) * 10000
         ) / 10000
       : null;
 
-  candidate.oddsSource =
-    odds !== null
-      ? "BSD_CONSENSUS"
-      : "UNAVAILABLE";
-
-  candidate.bookmaker =
-    odds !== null
-      ? "Consensus"
-      : null;
-
-  return candidate;
+  return item;
 }
 
 /* =========================================================
@@ -848,23 +886,40 @@ function applyOdds(
    ========================================================= */
 
 function rankingScore(
-  candidate
+  item
 ) {
   let score =
-    candidate.score;
+    item.score;
 
   /*
-   * Existing score stays primary.
-   * Odds/value remain secondary.
+   * Existing ranking philosophy.
+   * No new probability weighting.
    */
-
   if (
-    candidate.value !== null
+    item.value !== null
   ) {
     score +=
-      candidate.value * 20;
+      item.value * 20;
   } else {
     score -= 5;
+  }
+
+  /*
+   * Existing market-movement signal.
+   * Only real BSD movement.
+   */
+  if (
+    item.marketMovement ===
+    "SHORTENING"
+  ) {
+    score += 0.5;
+  }
+
+  if (
+    item.marketMovement ===
+    "DRIFTING"
+  ) {
+    score -= 0.5;
   }
 
   return score;
@@ -898,183 +953,170 @@ app.get(
         .toISOString()
         .slice(0, 10);
 
-    try {
-      const started =
-        Date.now();
+    const started =
+      Date.now();
 
-      /*
-       * STEP 1
-       * Ask BSD directly for the date.
-       */
-      const predictionData =
-        await fetchPredictionsForDate(
+    try {
+      const predictions =
+        await fetchPredictions(
           date
         );
 
-      const dateRows =
-        predictionData.rows;
+      const rows =
+        predictions.rows;
 
-      /*
-       * STEP 2
-       * Build all market candidates.
-       */
       let candidates =
-        dateRows.flatMap(
+        rows.flatMap(
           buildCandidates
         );
 
       /*
-       * STEP 3
-       * Select preliminary events
-       * using the existing model score.
+       * Select top 30 events using
+       * the existing model score.
        */
-      const preliminaryEvents =
+      const events =
         Array.from(
           new Map(
-            [...candidates]
+            candidates
               .sort(
                 (a, b) =>
                   b.score -
                   a.score
               )
               .map(
-                (candidate) => [
-                  candidate.eventId,
-                  candidate,
+                item => [
+                  item.eventId,
+                  item,
                 ]
               )
           ).values()
         ).slice(0, 30);
 
-      let requests = 0;
-      let successful = 0;
-      let failed = 0;
+      let oddsRequests = 0;
+      let oddsSuccessful = 0;
+      let oddsFailed = 0;
+      let oddsRows = 0;
 
-      /*
-       * STEP 4
-       * Get odds for each event.
-       */
       for (
-        const base
-        of preliminaryEvents
+        const event
+        of events
       ) {
-        requests++;
+        oddsRequests++;
 
-        const oddsResult =
-          await fetchEventOdds(
-            base.eventId
+        const result =
+          await fetchOdds(
+            event.eventId
           );
 
         if (
-          oddsResult.ok
+          result.ok
         ) {
-          successful++;
+          oddsSuccessful++;
+
+          oddsRows +=
+            result.parsed.rowsCount;
         } else {
-          failed++;
+          oddsFailed++;
         }
 
         const eventCandidates =
           candidates.filter(
-            (candidate) =>
-              candidate.eventId ===
-              base.eventId
+            item =>
+              item.eventId ===
+              event.eventId
           );
 
         for (
-          const candidate
+          const item
           of eventCandidates
         ) {
           applyOdds(
-            candidate,
-            oddsResult.odds
+            item,
+            result.parsed
           );
         }
       }
 
       /*
-       * STEP 5
-       * Rank after odds are attached.
+       * Final ranking.
        */
       const ranked =
         candidates
           .map(
-            (candidate) => ({
-              ...candidate,
-
-              internalRank:
+            item => ({
+              ...item,
+              rankScore:
                 rankingScore(
-                  candidate
+                  item
                 ),
             })
           )
           .sort(
             (a, b) =>
-              b.internalRank -
-              a.internalRank
+              b.rankScore -
+              a.rankScore
           );
 
       /*
-       * STEP 6
-       * Final maximum 5.
-       *
-       * Never force five.
+       * Maximum 5.
        * No duplicate event.
+       * Maximum 3 TOTAL markets.
+       * No artificial filling.
        */
       const topPicks = [];
 
       const usedEvents =
         new Set();
 
-      let totalMarkets = 0;
+      let totalCount = 0;
 
       for (
-        const candidate
+        const item
         of ranked
       ) {
         if (
+          topPicks.length >= 5
+        ) {
+          break;
+        }
+
+        if (
           usedEvents.has(
-            candidate.eventId
+            item.eventId
           )
         ) {
           continue;
         }
 
-        /*
-         * No real odds = no final pick.
-         */
         if (
-          candidate.odds === null
+          item.odds === null
         ) {
           continue;
         }
 
-        /*
-         * Maximum three TOTAL
-         * selections.
-         */
         if (
-          candidate.market ===
+          item.market ===
             "TOTAL" &&
-          totalMarkets >= 3
+          totalCount >= 3
         ) {
           continue;
         }
 
         usedEvents.add(
-          candidate.eventId
+          item.eventId
         );
 
         if (
-          candidate.market ===
+          item.market ===
           "TOTAL"
         ) {
-          totalMarkets++;
+          totalCount++;
         }
 
         const {
-          internalRank,
+          rankScore,
           ...output
-        } = candidate;
+        } = item;
 
         output.exchangeMovement =
           null;
@@ -1082,18 +1124,14 @@ app.get(
         topPicks.push(
           output
         );
-
-        if (
-          topPicks.length >= 5
-        ) {
-          break;
-        }
       }
 
       res.json({
-        version: VERSION,
+        version:
+          VERSION,
 
-        source: SOURCE,
+        source:
+          SOURCE,
 
         date,
 
@@ -1115,13 +1153,13 @@ app.get(
         },
 
         predictionsTotal:
-          predictionData.total,
+          predictions.total,
 
         predictionsDownloaded:
-          dateRows.length,
+          rows.length,
 
         predictionsFound:
-          dateRows.length,
+          rows.length,
 
         candidatesFound:
           candidates.length,
@@ -1134,18 +1172,24 @@ app.get(
 
         oddsStatus: {
           endpoint:
-            "/api/v2/events/{id}/odds/",
+            "/api/v2/odds/?event_id={id}",
 
-          requests,
+          requests:
+            oddsRequests,
 
-          successful,
+          successful:
+            oddsSuccessful,
 
-          failed,
+          failed:
+            oddsFailed,
+
+          rows:
+            oddsRows,
 
           message:
-            successful > 0
-              ? "Real BSD event odds were retrieved and included in ranking."
-              : "No BSD event odds were retrieved.",
+            oddsSuccessful > 0
+              ? "Real BSD bookmaker odds were retrieved and parsed."
+              : "No BSD odds were retrieved.",
         },
 
         topPicks,
@@ -1153,14 +1197,65 @@ app.get(
 
     } catch (error) {
       console.error(
-        "TOP PICKS ERROR:",
+        "TOP PICKS ERROR",
         error
       );
 
       res.status(500).json({
-        version: VERSION,
+        version:
+          VERSION,
 
-        source: SOURCE,
+        source:
+          SOURCE,
+
+        error:
+          error?.message ??
+          "Unknown error",
+      });
+    }
+  }
+);
+
+/* =========================================================
+   DEBUG PREDICTION
+   ========================================================= */
+
+app.get(
+  "/api/debug-prediction",
+  async (
+    req,
+    res
+  ) => {
+    const date =
+      req.query.date ??
+      new Date()
+        .toISOString()
+        .slice(0, 10);
+
+    try {
+      const result =
+        await fetchPredictions(
+          date
+        );
+
+      res.json({
+        version:
+          VERSION,
+
+        date,
+
+        count:
+          result.rows.length,
+
+        first:
+          result.rows[0] ??
+          null,
+      });
+
+    } catch (error) {
+      res.status(500).json({
+        version:
+          VERSION,
 
         error:
           error?.message ??
@@ -1176,7 +1271,10 @@ app.get(
 
 app.get(
   "/api/debug-odds",
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
     const eventId =
       req.query.eventId;
 
@@ -1191,27 +1289,29 @@ app.get(
 
     try {
       const result =
-        await fetchEventOdds(
+        await fetchOdds(
           eventId
         );
 
       res
         .status(
-          result.status || 500
+          result.status ||
+          500
         )
         .json({
-          version: VERSION,
+          version:
+            VERSION,
 
           eventId,
 
           endpoint:
-            `${BSD_BASE}/events/${eventId}/odds/`,
+            `${BSD_BASE}/odds/?event_id=${eventId}`,
 
           httpStatus:
             result.status,
 
-          normalized:
-            result.odds,
+          parsed:
+            result.parsed,
 
           raw:
             result.body,
@@ -1219,7 +1319,8 @@ app.get(
 
     } catch (error) {
       res.status(500).json({
-        version: VERSION,
+        version:
+          VERSION,
 
         eventId,
 
