@@ -29,295 +29,105 @@ const cache = new Map();
 
 const num = (v, d = null) => Number.isFinite(Number(v)) ? Number(v) : d;
 const arr = v => Array.isArray(v) ? v : [];
-const pct = v => {
-  const n = num(v);
-  return n === null ? null : Number((n <= 1 ? n * 100 : n).toFixed(4));
-};
+const pct = v => { const n = num(v); return n === null ? null : Number((n <= 1 ? n * 100 : n).toFixed(4)); };
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const nowIso = () => new Date().toISOString();
-const dateObj = v => {
-  const d = new Date(v);
-  return v && !Number.isNaN(d.getTime()) ? d : null;
-};
-const implied = odds => {
-  const n = num(odds);
-  return n !== null && n > 1 ? 100 / n : null;
-};
-const edge = (probability, odds) => {
-  const p = pct(probability);
-  const i = implied(odds);
-  return p === null || i === null ? null : p - i;
-};
-const firstObject = (...values) =>
-  values.find(v => v && typeof v === "object" && !Array.isArray(v)) || null;
+const dateObj = v => { const d = new Date(v); return v && !Number.isNaN(d.getTime()) ? d : null; };
+const implied = odds => { const n = num(odds); return n !== null && n > 1 ? 100 / n : null; };
+const edge = (probability, odds) => { const p = pct(probability); const i = implied(odds); return p === null || i === null ? null : p - i; };
+const firstObject = (...values) => values.find(v => v && typeof v === "object" && !Array.isArray(v)) || null;
 const norm = v => String(v ?? "").toUpperCase().replace(/[\s_-]/g, "");
 
 function cacheGet(key) {
   const item = cache.get(key);
   if (!item) return null;
-
-  if (Date.now() - item.time > CACHE_TTL_MS) {
-    cache.delete(key);
-    return null;
-  }
-
+  if (Date.now() - item.time > CACHE_TTL_MS) { cache.delete(key); return null; }
   return item.value;
 }
-
-function cacheSet(key, value) {
-  cache.set(key, { time: Date.now(), value });
-  return value;
-}
+function cacheSet(key, value) { cache.set(key, { time: Date.now(), value }); return value; }
 
 async function bsd(path, { wom = false, odds = false } = {}) {
-  if (!BSD_API_KEY) {
-    const e = new Error("BSD_API_KEY is not configured");
-    e.status = 503;
-    e.code = "BSD_NOT_CONFIGURED";
-    throw e;
-  }
-
-  const base = wom
-    ? WOM_BASE_URL
-    : odds
-      ? ODDS_BASE_URL
-      : BSD_BASE_URL;
-
+  if (!BSD_API_KEY) { const e = new Error("BSD_API_KEY is not configured"); e.status = 503; e.code = "BSD_NOT_CONFIGURED"; throw e; }
+  const base = wom ? WOM_BASE_URL : odds ? ODDS_BASE_URL : BSD_BASE_URL;
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    REQUEST_TIMEOUT_MS
-  );
-
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(
-      `${base}${path.startsWith("/") ? path : `/${path}`}`,
-      {
-        headers: {
-          Authorization: `Token ${BSD_API_KEY}`,
-          Accept: "application/json"
-        },
-        signal: controller.signal
-      }
-    );
-
+    const response = await fetch(`${base}${path.startsWith("/") ? path : `/${path}`}`, {
+      headers: { Authorization: `Token ${BSD_API_KEY}`, Accept: "application/json" },
+      signal: controller.signal
+    });
     const text = await response.text();
-
     let data = null;
-
-    try {
-      data = text ? JSON.parse(text) : null;
-    } catch {
-      data = text;
-    }
-
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
     if (!response.ok) {
       const e = new Error(`BSD HTTP ${response.status}`);
-      e.status = response.status;
-      e.code = `BSD_HTTP_${response.status}`;
-      e.data = data;
-      throw e;
+      e.status = response.status; e.code = `BSD_HTTP_${response.status}`; e.data = data; throw e;
     }
-
     return data;
   } catch (e) {
-    if (e.name === "AbortError") {
-      const x = new Error("BSD request timeout");
-      x.status = 504;
-      x.code = "BSD_TIMEOUT";
-      throw x;
-    }
-
+    if (e.name === "AbortError") { const x = new Error("BSD request timeout"); x.status = 504; x.code = "BSD_TIMEOUT"; throw x; }
     throw e;
-  } finally {
-    clearTimeout(timer);
-  }
+  } finally { clearTimeout(timer); }
 }
 
 async function safe(path, options = {}) {
-  try {
-    return await bsd(path, options);
-  } catch (e) {
-    console.error(`[BSD] ${path}`, e.code || e.message);
-    return null;
-  }
+  try { return await bsd(path, options); }
+  catch (e) { console.error(`[BSD] ${path}`, e.code || e.message); return null; }
 }
 
 function collection(data) {
   if (Array.isArray(data)) return data;
-
   if (!data || typeof data !== "object") return [];
-
-  for (const key of [
-    "results",
-    "items",
-    "events",
-    "matches",
-    "fixtures",
-    "predictions",
-    "odds"
-  ]) {
+  for (const key of ["results", "items", "events", "matches", "fixtures", "predictions", "odds"]) {
     if (Array.isArray(data[key])) return data[key];
   }
-
   if (Array.isArray(data.data)) return data.data;
-
-  if (data.data && typeof data.data === "object") {
-    return collection(data.data);
-  }
-
+  if (data.data && typeof data.data === "object") return collection(data.data);
   return [];
 }
 
 function status(raw) {
-  const s = String(
-    raw?.status ??
-    raw?.fixture?.status ??
-    raw?.state ??
-    ""
-  ).toLowerCase();
-
-  if (["upcoming", "scheduled", "notstarted", "not_started"].includes(s))
-    return "notstarted";
-
-  if (["live", "inplay", "in-play", "in_progress", "inprogress"].includes(s))
-    return "live";
-
-  if (["finished", "complete", "completed", "ended"].includes(s))
-    return "finished";
-
-  if (["cancelled", "canceled"].includes(s))
-    return "cancelled";
-
-  if (s === "postponed")
-    return "postponed";
-
+  const s = String(raw?.status ?? raw?.fixture?.status ?? raw?.state ?? "").toLowerCase();
+  if (["upcoming", "scheduled", "notstarted", "not_started"].includes(s)) return "notstarted";
+  if (["live", "inplay", "in-play", "in_progress", "inprogress"].includes(s)) return "live";
+  if (["finished", "complete", "completed", "ended"].includes(s)) return "finished";
+  if (["cancelled", "canceled"].includes(s)) return "cancelled";
+  if (s === "postponed") return "postponed";
   return "unknown";
 }
 
 function normalizeTeam(value, fallback = "") {
-  if (typeof value === "string") {
-    return { id: null, name: value };
-  }
-
-  return {
-    id: num(value?.id ?? value?.teamId ?? value?.team_id),
-    name: value?.name ?? value?.teamName ?? fallback
-  };
+  if (typeof value === "string") return { id: null, name: value };
+  return { id: num(value?.id ?? value?.teamId ?? value?.team_id), name: value?.name ?? value?.teamName ?? fallback };
 }
 
 function normalizeEvent(raw) {
   if (!raw || typeof raw !== "object") return null;
-
-  const fixture =
-    firstObject(raw.fixture, raw.event, raw.match) || raw;
-
-  const homeValue =
-    raw.home_team && typeof raw.home_team === "object"
-      ? raw.home_team
-      : firstObject(
-          raw.homeTeam,
-          raw.teams?.home,
-          raw.home,
-          fixture.home_team,
-          fixture.homeTeam,
-          fixture.teams?.home,
-          fixture.home
-        );
-
-  const awayValue =
-    raw.away_team && typeof raw.away_team === "object"
-      ? raw.away_team
-      : firstObject(
-          raw.awayTeam,
-          raw.teams?.away,
-          raw.away,
-          fixture.away_team,
-          fixture.awayTeam,
-          fixture.teams?.away,
-          fixture.away
-        );
-
-  const home = normalizeTeam(
-    homeValue,
-    raw.homeName || "Home"
-  );
-
-  const away = normalizeTeam(
-    awayValue,
-    raw.awayName || "Away"
-  );
-
-  if (
-    home &&
-    (raw.home_team_id !== undefined ||
-      raw.home_team !== undefined)
-  ) {
-    home.id = num(raw.home_team_id ?? home.id);
-  }
-
-  if (
-    away &&
-    (raw.away_team_id !== undefined ||
-      raw.away_team !== undefined)
-  ) {
-    away.id = num(raw.away_team_id ?? away.id);
-  }
-
-  if (raw.home_team && typeof raw.home_team === "string") {
-    home.name = raw.home_team;
-  }
-
-  if (raw.away_team && typeof raw.away_team === "string") {
-    away.name = raw.away_team;
-  }
-
-  const id = num(
-    raw.id ??
-    raw.event_id ??
-    raw.eventId ??
-    fixture.id ??
-    fixture.event_id ??
-    fixture.eventId
-  );
-
+  const fixture = firstObject(raw.fixture, raw.event, raw.match) || raw;
+  const homeValue = raw.home_team && typeof raw.home_team === "object"
+    ? raw.home_team
+    : firstObject(raw.homeTeam, raw.teams?.home, raw.home, fixture.home_team, fixture.homeTeam, fixture.teams?.home, fixture.home);
+  const awayValue = raw.away_team && typeof raw.away_team === "object"
+    ? raw.away_team
+    : firstObject(raw.awayTeam, raw.teams?.away, raw.away, fixture.away_team, fixture.awayTeam, fixture.teams?.away, fixture.away);
+  const home = normalizeTeam(homeValue, raw.homeName || "Home");
+  const away = normalizeTeam(awayValue, raw.awayName || "Away");
+  if (home && (raw.home_team_id !== undefined || raw.home_team !== undefined)) home.id = num(raw.home_team_id ?? home.id);
+  if (away && (raw.away_team_id !== undefined || raw.away_team !== undefined)) away.id = num(raw.away_team_id ?? away.id);
+  if (raw.home_team && typeof raw.home_team === "string") home.name = raw.home_team;
+  if (raw.away_team && typeof raw.away_team === "string") away.name = raw.away_team;
+  const id = num(raw.id ?? raw.event_id ?? raw.eventId ?? fixture.id ?? fixture.event_id ?? fixture.eventId);
   if (id === null) return null;
-
   return {
     id,
-    event:
-      raw.name ??
-      fixture.name ??
-      `${home.name} – ${away.name}`,
-    date:
-      raw.event_date ??
-      raw.date ??
-      raw.startTime ??
-      raw.start_time ??
-      raw.utcDate ??
-      raw.kickoff ??
-      fixture.event_date ??
-      fixture.date ??
-      fixture.startTime ??
-      fixture.start_time ??
-      fixture.utcDate ??
-      fixture.kickoff ??
-      null,
+    event: raw.name ?? fixture.name ?? `${home.name} – ${away.name}`,
+    date: raw.event_date ?? raw.date ?? raw.startTime ?? raw.start_time ?? raw.utcDate ?? raw.kickoff ?? fixture.event_date ?? fixture.date ?? fixture.startTime ?? fixture.start_time ?? fixture.utcDate ?? fixture.kickoff ?? null,
     status: status(raw),
-    league:
-      raw.league?.name ??
-      raw.competition?.name ??
-      raw.leagueName ??
-      (typeof raw.league === "string" ? raw.league : null),
+    league: raw.league?.name ?? raw.competition?.name ?? raw.leagueName ?? (typeof raw.league === "string" ? raw.league : null),
     leagueId: num(raw.league?.id ?? raw.leagueId),
     seasonId: num(raw.season?.id ?? raw.seasonId),
-    home,
-    away,
-    referee: firstObject(
-      raw.referee,
-      raw.official,
-      fixture.referee
-    ),
+    home, away,
+    referee: firstObject(raw.referee, raw.official, fixture.referee),
     raw
   };
 }
@@ -335,216 +145,35 @@ function predictionEventId(p) {
 
 function parsePrediction(p) {
   if (!p || typeof p !== "object") return null;
-
-  const root =
-    firstObject(
-      p.prediction,
-      p.predictions,
-      p.forecast,
-      p.data?.prediction,
-      p.data?.predictions
-    ) || p;
-
-  const markets =
-    firstObject(root.markets, p.markets) || {};
-
-  const result =
-    firstObject(
-      markets.match_result,
-      markets.matchResult,
-      markets["1x2"],
-      root.match_result
-    ) || {};
-
-  const ou =
-    firstObject(
-      markets.over_under,
-      markets.overUnder,
-      markets.goals,
-      root.over_under
-    ) || {};
-
-  const btts =
-    firstObject(
-      markets.btts,
-      markets.BTTS,
-      root.btts
-    ) || {};
-
-  const model =
-    firstObject(
-      root.model,
-      p.model,
-      root.ai,
-      p.ai
-    ) || {};
-
-  const home = pct(
-    root.prob_home_win ??
-    root.home_win_prob ??
-    root.homeWinProb ??
-    root.homeProbability ??
-    root.home_win ??
-    result.prob_home ??
-    result.home ??
-    result.home_prob
-  );
-
-  const draw = pct(
-    root.prob_draw ??
-    root.draw_prob ??
-    root.drawProbability ??
-    root.draw_win_prob ??
-    result.prob_draw ??
-    result.draw ??
-    result.draw_prob
-  );
-
-  const away = pct(
-    root.prob_away_win ??
-    root.away_win_prob ??
-    root.awayWinProb ??
-    root.awayProbability ??
-    root.away_win ??
-    result.prob_away ??
-    result.away ??
-    result.away_prob
-  );
-
-  const over15 = pct(
-    root.prob_over_15 ??
-    root.over_1_5_prob ??
-    root.over15 ??
-    root.over_15 ??
-    root.over1_5 ??
-    ou.prob_over_15 ??
-    ou.over_15 ??
-    ou.over15
-  );
-
-  const over25 = pct(
-    root.prob_over_25 ??
-    root.over_2_5_prob ??
-    root.over25 ??
-    root.over_25 ??
-    root.over2_5 ??
-    ou.prob_over_25 ??
-    ou.over_25 ??
-    ou.over25
-  );
-
-  const under25 = pct(
-    root.prob_under_25 ??
-    root.under_2_5_prob ??
-    root.under25 ??
-    root.under_25 ??
-    root.under2_5 ??
-    ou.prob_under_25 ??
-    ou.under_25 ??
-    ou.under25
-  );
-
-  const under35 = pct(
-    root.prob_under_35 ??
-    root.under_3_5_prob ??
-    root.under35 ??
-    root.under_35 ??
-    root.under3_5 ??
-    ou.prob_under_35 ??
-    ou.under_35 ??
-    ou.under35
-  );
-
-  const bttsYes = pct(
-    root.prob_btts_yes ??
-    root.btts_yes_prob ??
-    root.bttsYesProb ??
-    root.btts ??
-    root.bothTeamsToScore ??
-    btts.prob_yes ??
-    btts.yes ??
-    btts.prob_btts_yes
-  );
-
-  const bttsNo = pct(
-    root.prob_btts_no ??
-    root.btts_no_prob ??
-    root.bttsNoProb ??
-    btts.prob_no ??
-    btts.no ??
-    btts.prob_btts_no
-  );
-
-  const confidence = pct(
-    root.confidence ??
-    root.modelConfidence ??
-    root.model_confidence ??
-    model.confidence
-  );
-
-  const predicted =
-    root.predicted_result ??
-    root.predictedResult ??
-    root.prediction_label ??
-    root.predicted ??
-    p.predicted_result ??
-    null;
-
-  const expectedGoals =
-    firstObject(
-      root.expected_goals,
-      root.expectedGoals,
-      model.expected_goals,
-      model.expectedGoals
-    ) || null;
-
-  if (
-    [
-      home,
-      draw,
-      away,
-      over15,
-      over25,
-      under25,
-      under35,
-      bttsYes,
-      bttsNo,
-      confidence
-    ].every(v => v === null)
-  ) {
-    return null;
-  }
-
-  return {
-    home,
-    draw,
-    away,
-    over15,
-    over25,
-    under25,
-    under35,
-    btts: bttsYes,
-    bttsNo,
-    confidence,
-    predicted,
-    expectedGoals,
-    raw: p
-  };
+  const root = firstObject(p.prediction, p.predictions, p.forecast, p.data?.prediction, p.data?.predictions) || p;
+  const markets = firstObject(root.markets, p.markets) || {};
+  const result = firstObject(markets.match_result, markets.matchResult, markets["1x2"], root.match_result) || {};
+  const ou = firstObject(markets.over_under, markets.overUnder, markets.goals, root.over_under) || {};
+  const btts = firstObject(markets.btts, markets.BTTS, root.btts) || {};
+  const model = firstObject(root.model, p.model, root.ai, p.ai) || {};
+  const home = pct(root.prob_home_win ?? root.home_win_prob ?? root.homeWinProb ?? root.homeProbability ?? root.home_win ?? result.prob_home ?? result.home ?? result.home_prob);
+  const draw = pct(root.prob_draw ?? root.draw_prob ?? root.drawProbability ?? root.draw_win_prob ?? result.prob_draw ?? result.draw ?? result.draw_prob);
+  const away = pct(root.prob_away_win ?? root.away_win_prob ?? root.awayWinProb ?? root.awayProbability ?? root.away_win ?? result.prob_away ?? result.away ?? result.away_prob);
+  const over15 = pct(root.prob_over_15 ?? root.over_1_5_prob ?? root.over15 ?? root.over_15 ?? root.over1_5 ?? ou.prob_over_15 ?? ou.over_15 ?? ou.over15);
+  const over25 = pct(root.prob_over_25 ?? root.over_2_5_prob ?? root.over25 ?? root.over_25 ?? root.over2_5 ?? ou.prob_over_25 ?? ou.over_25 ?? ou.over25);
+  const under25 = pct(root.prob_under_25 ?? root.under_2_5_prob ?? root.under25 ?? root.under_25 ?? root.under2_5 ?? ou.prob_under_25 ?? ou.under_25 ?? ou.under25);
+  const under35 = pct(root.prob_under_35 ?? root.under_3_5_prob ?? root.under35 ?? root.under_35 ?? root.under3_5 ?? ou.prob_under_35 ?? ou.under_35 ?? ou.under35);
+  const bttsYes = pct(root.prob_btts_yes ?? root.btts_yes_prob ?? root.bttsYesProb ?? root.btts ?? root.bothTeamsToScore ?? btts.prob_yes ?? btts.yes ?? btts.prob_btts_yes);
+  const bttsNo = pct(root.prob_btts_no ?? root.btts_no_prob ?? root.bttsNoProb ?? btts.prob_no ?? btts.no ?? btts.prob_btts_no);
+  const confidence = pct(root.confidence ?? root.modelConfidence ?? root.model_confidence ?? model.confidence);
+  const predicted = root.predicted_result ?? root.predictedResult ?? root.prediction_label ?? root.predicted ?? p.predicted_result ?? null;
+  const expectedGoals = firstObject(root.expected_goals, root.expectedGoals, model.expected_goals, model.expectedGoals) || null;
+  if ([home, draw, away, over15, over25, under25, under35, bttsYes, bttsNo, confidence].every(v => v === null)) return null;
+  return { home, draw, away, over15, over25, under25, under35, btts: bttsYes, bttsNo, confidence, predicted, expectedGoals, raw: p };
 }
 
-async function getPredictionMap(
-  date = nowIso().slice(0, 10)
-) {
+async function getPredictionMap(date = nowIso().slice(0, 10)) {
   const key = `predictions:${date}:v7`;
-  const cached = cacheGet(key);
-
-  if (cached) return cached;
+  const cached = cacheGet(key); if (cached) return cached;
 
   const queries = [
     `/predictions/?upcoming=true&limit=200`,
-    `/predictions/?date_from=${encodeURIComponent(
-      date
-    )}&date_to=${encodeURIComponent(date)}&limit=200`
+    `/predictions/?date_from=${encodeURIComponent(date)}&date_to=${encodeURIComponent(date)}&limit=200`
   ];
 
   const map = new Map();
@@ -561,20 +190,11 @@ async function getPredictionMap(
       }
     }
 
-    if (
-      map.size > 0 &&
-      path.includes("upcoming=true")
-    ) {
+    if (map.size > 0 && path.includes("upcoming=true")) {
       break;
     }
   }
 
-  /*
-   * FALLBACK:
-   * Jeżeli zbiorczy endpoint predictions nie zwróci
-   * użytecznych rekordów, sprawdzamy prediction bezpośrednio
-   * w szczegółach wydarzeń.
-   */
   if (map.size === 0) {
     const events = await getEvents(date);
 
@@ -583,30 +203,32 @@ async function getPredictionMap(
 
       const rows = await Promise.all(
         batch.map(async event => {
-          const detail = await safe(
-            `/events/${encodeURIComponent(event.id)}/`
-          );
-
-          const inline = parsePrediction(detail);
-
-          if (inline) {
-            return [event.id, inline];
-          }
-
           const data = await safe(
             `/events/${encodeURIComponent(event.id)}/prediction/`
           );
 
           const prediction = parsePrediction(data);
 
-          return prediction
-            ? [event.id, prediction]
+          if (prediction) {
+            return [event.id, prediction];
+          }
+
+          const detail = await safe(
+            `/events/${encodeURIComponent(event.id)}/`
+          );
+
+          const inline = parsePrediction(detail);
+
+          return inline
+            ? [event.id, inline]
             : null;
         })
       );
 
       for (const row of rows) {
-        if (row) map.set(row[0], row[1]);
+        if (row) {
+          map.set(row[0], row[1]);
+        }
       }
     }
   }
@@ -615,615 +237,195 @@ async function getPredictionMap(
 }
 
 function marketKey(market, line, selection) {
-  const raw = String(market ?? "")
-    .toUpperCase()
-    .trim();
-
-  const m = norm(raw);
-  const s = norm(selection);
-
-  const codeHas = token =>
-    m.includes(norm(token));
-
-  const explicitLine =
-    line === null ||
-    line === undefined ||
-    line === ""
-      ? null
-      : num(line);
-
-  const embeddedLine =
-    raw.match(
-      /(?:OU|OVER_UNDER|OVERUNDER|TOTAL|GOALS)[_ -]?(\d+(?:\.\d+)?)/i
-    ) ||
-    m.match(
-      /(?:OU|OVERUNDER|TOTAL|GOALS)(\d+(?:\.\d+)?)/i
-    );
-
-  const selectionLine =
-    explicitLine ??
-    (embeddedLine
-      ? Number(embeddedLine[1])
-      : null);
-
-  const hasFirstHalf =
-    /(?:^|[^A-Z0-9])(1H|HT)(?:$|[^A-Z0-9])/.test(raw);
-
-  const hasSecondHalf =
-    /(?:^|[^A-Z0-9])2H(?:$|[^A-Z0-9])/.test(raw);
-
-  const hasAnyHalfToken =
-    /(?:^|[^A-Z0-9])(1H|HT|2H)(?:$|[^A-Z0-9])/.test(raw);
-
-  const hasFullTime =
-    /(?:^|[^A-Z0-9])FT(?:$|[^A-Z0-9])/.test(raw);
-
-  if (
-    hasFirstHalf ||
-    hasSecondHalf ||
-    (hasAnyHalfToken && !hasFullTime)
-  ) {
-    return null;
+  const raw = String(market ?? "").toUpperCase().trim();
+  const m = norm(raw), s = norm(selection);
+  const codeHas = token => m.includes(norm(token));
+  const explicitLine = line === null || line === undefined || line === "" ? null : num(line);
+  const embeddedLine = raw.match(/(?:OU|OVER_UNDER|OVERUNDER|TOTAL|GOALS)[_ -]?(\d+(?:\.\d+)?)/i) || m.match(/(?:OU|OVERUNDER|TOTAL|GOALS)(\d+(?:\.\d+)?)/i);
+  const selectionLine = explicitLine ?? (embeddedLine ? Number(embeddedLine[1]) : null);
+  const hasFirstHalf = /(?:^|[^A-Z0-9])(1H|HT)(?:$|[^A-Z0-9])/.test(raw);
+  const hasSecondHalf = /(?:^|[^A-Z0-9])2H(?:$|[^A-Z0-9])/.test(raw);
+  const hasAnyHalfToken = /(?:^|[^A-Z0-9])(1H|HT|2H)(?:$|[^A-Z0-9])/.test(raw);
+  const hasFullTime = /(?:^|[^A-Z0-9])FT(?:$|[^A-Z0-9])/.test(raw);
+  if (hasFirstHalf || hasSecondHalf || (hasAnyHalfToken && !hasFullTime)) return null;
+  if (/^1X2(?:HOME|1)(?:FT)?$/.test(m) || /^1X2HOME/.test(m)) return "HOME";
+  if (/^1X2(?:DRAW|X)(?:FT)?$/.test(m) || /^1X2DRAW/.test(m)) return "DRAW";
+  if (/^1X2(?:AWAY|2)(?:FT)?$/.test(m) || /^1X2AWAY/.test(m)) return "AWAY";
+  if (/^(?:1X2|MATCHRESULT|RESULT|WINNER)/.test(m)) {
+    if (["HOME", "1"].includes(s) || codeHas("1X2_HOME")) return "HOME";
+    if (["DRAW", "X"].includes(s) || codeHas("1X2_DRAW")) return "DRAW";
+    if (["AWAY", "2"].includes(s) || codeHas("1X2_AWAY")) return "AWAY";
   }
-
-  if (
-    /^1X2(?:HOME|1)(?:FT)?$/.test(m) ||
-    /^1X2HOME/.test(m)
-  ) {
-    return "HOME";
+  if (m.startsWith("DOUBLE") || m === "DC" || m.startsWith("DOUBLECHANCE")) {
+    if (s === "1X" || m.includes("1X")) return "DC1X";
+    if (s === "X2" || m.includes("X2")) return "DCX2";
   }
-
-  if (
-    /^1X2(?:DRAW|X)(?:FT)?$/.test(m) ||
-    /^1X2DRAW/.test(m)
-  ) {
-    return "DRAW";
+  if (m.startsWith("OU") || m.includes("OVERUNDER") || m.startsWith("TOTAL") || m.startsWith("GOALS")) {
+    const isOver = s.includes("OVER") || m.includes("OVER");
+    const isUnder = s.includes("UNDER") || m.includes("UNDER");
+    if (isOver && selectionLine === 1.5) return "OVER15";
+    if (isOver && selectionLine === 2.5) return "OVER25";
+    if (isUnder && selectionLine === 2.5) return "UNDER25";
+    if (isUnder && selectionLine === 3.5) return "UNDER35";
   }
-
-  if (
-    /^1X2(?:AWAY|2)(?:FT)?$/.test(m) ||
-    /^1X2AWAY/.test(m)
-  ) {
-    return "AWAY";
+  if (m.includes("BTTS") || m.includes("BOTHTEAM")) {
+    if (["YES", "Y"].includes(s) || m.includes("BTTSYES") || (m.includes("BTTS") && !m.includes("NO") && s === "")) return "BTTS_YES";
+    if (["NO", "N"].includes(s) || m.includes("BTTSNO")) return "BTTS_NO";
   }
-
-  if (
-    /^(?:1X2|MATCHRESULT|RESULT|WINNER)/.test(m)
-  ) {
-    if (
-      ["HOME", "1"].includes(s) ||
-      codeHas("1X2_HOME")
-    ) {
-      return "HOME";
-    }
-
-    if (
-      ["DRAW", "X"].includes(s) ||
-      codeHas("1X2_DRAW")
-    ) {
-      return "DRAW";
-    }
-
-    if (
-      ["AWAY", "2"].includes(s) ||
-      codeHas("1X2_AWAY")
-    ) {
-      return "AWAY";
-    }
-  }
-
-  if (
-    m.startsWith("DOUBLE") ||
-    m === "DC" ||
-    m.startsWith("DOUBLECHANCE")
-  ) {
-    if (s === "1X" || m.includes("1X"))
-      return "DC1X";
-
-    if (s === "X2" || m.includes("X2"))
-      return "DCX2";
-  }
-
-  if (
-    m.startsWith("OU") ||
-    m.includes("OVERUNDER") ||
-    m.startsWith("TOTAL") ||
-    m.startsWith("GOALS")
-  ) {
-    const isOver =
-      s.includes("OVER") ||
-      m.includes("OVER");
-
-    const isUnder =
-      s.includes("UNDER") ||
-      m.includes("UNDER");
-
-    if (isOver && selectionLine === 1.5)
-      return "OVER15";
-
-    if (isOver && selectionLine === 2.5)
-      return "OVER25";
-
-    if (isUnder && selectionLine === 2.5)
-      return "UNDER25";
-
-    if (isUnder && selectionLine === 3.5)
-      return "UNDER35";
-  }
-
-  if (
-    m.includes("BTTS") ||
-    m.includes("BOTHTEAM")
-  ) {
-    if (
-      ["YES", "Y"].includes(s) ||
-      m.includes("BTTSYES") ||
-      (
-        m.includes("BTTS") &&
-        !m.includes("NO") &&
-        s === ""
-      )
-    ) {
-      return "BTTS_YES";
-    }
-
-    if (
-      ["NO", "N"].includes(s) ||
-      m.includes("BTTSNO")
-    ) {
-      return "BTTS_NO";
-    }
-  }
-
   return null;
 }
 
-function normalizeMovement(
-  movement,
-  currentOdds = null,
-  previousOdds = null
-) {
+function normalizeMovement(movement, currentOdds = null, previousOdds = null) {
   const m = String(movement ?? "").toUpperCase();
-
-  if (
-    ["SHORTENING", "DRIFTING", "STABLE"].includes(m)
-  ) {
-    return m;
-  }
-
-  if (
-    ["DOWN", "FALL", "FALLING"].includes(m)
-  ) {
-    return "SHORTENING";
-  }
-
-  if (
-    ["UP", "RISE", "RISING"].includes(m)
-  ) {
-    return "DRIFTING";
-  }
-
-  const current = num(currentOdds);
-  const previous = num(previousOdds);
-
-  if (
-    current !== null &&
-    previous !== null &&
-    previous > 1
-  ) {
-    const change =
-      ((current - previous) / previous) * 100;
-
-    if (change < -0.15)
-      return "SHORTENING";
-
-    if (change > 0.15)
-      return "DRIFTING";
-
+  if (["SHORTENING", "DRIFTING", "STABLE"].includes(m)) return m;
+  if (["DOWN", "FALL", "FALLING"].includes(m)) return "SHORTENING";
+  if (["UP", "RISE", "RISING"].includes(m)) return "DRIFTING";
+  const current = num(currentOdds), previous = num(previousOdds);
+  if (current !== null && previous !== null && previous > 1) {
+    const change = (current - previous) / previous * 100;
+    if (change < -0.15) return "SHORTENING";
+    if (change > 0.15) return "DRIFTING";
     return "STABLE";
   }
-
   return "UNKNOWN";
 }
 
 function emptyMarkets() {
-  return Object.fromEntries(
-    [
-      "HOME",
-      "DRAW",
-      "AWAY",
-      "OVER15",
-      "OVER25",
-      "UNDER25",
-      "UNDER35",
-      "BTTS_YES",
-      "BTTS_NO",
-      "DC1X",
-      "DCX2"
-    ].map(k => [k, []])
-  );
+  return Object.fromEntries(["HOME","DRAW","AWAY","OVER15","OVER25","UNDER25","UNDER35","BTTS_YES","BTTS_NO","DC1X","DCX2"].map(k => [k, []]));
 }
 
 function extractOdds(data) {
   const out = emptyMarkets();
+  if (!data || typeof data !== "object") return out;
 
-  if (!data || typeof data !== "object")
-    return out;
-
-  const push = (
-    key,
-    odds,
-    previousOdds = null,
-    movement = null,
-    meta = {}
-  ) => {
+  const push = (key, odds, previousOdds = null, movement = null, meta = {}) => {
     const o = num(odds);
-
-    if (
-      !key ||
-      o === null ||
-      o <= 1
-    ) {
-      return;
-    }
-
+    if (!key || o === null || o <= 1) return;
     out[key].push({
       odds: o,
       previousOdds: num(previousOdds),
-      movement: normalizeMovement(
-        movement,
-        o,
-        previousOdds
-      ),
+      movement: normalizeMovement(movement, o, previousOdds),
       ...meta
     });
   };
 
-  const root =
-    firstObject(
-      data.odds,
-      data.consensus,
-      data.data?.odds
-    ) || {};
+  const root = firstObject(data.odds, data.consensus, data.data?.odds) || {};
+  const mw = firstObject(root.match_winner, root.matchWinner, root["1x2"]) || {};
+  const ou = firstObject(root.over_under, root.overUnder, root.goals) || {};
+  const bt = firstObject(root.btts, root.BTTS) || {};
 
-  const mw =
-    firstObject(
-      root.match_winner,
-      root.matchWinner,
-      root["1x2"]
-    ) || {};
-
-  const ou =
-    firstObject(
-      root.over_under,
-      root.overUnder,
-      root.goals
-    ) || {};
-
-  const bt =
-    firstObject(
-      root.btts,
-      root.BTTS
-    ) || {};
-
-  const officialValue = (
-    value,
-    previous = null,
-    movement = null
-  ) => {
-    if (
-      value &&
-      typeof value === "object"
-    ) {
+  const officialValue = (value, previous = null, movement = null) => {
+    if (value && typeof value === "object") {
       return [
-        value.price ??
-          value.decimal_odds ??
-          value.odds,
-        value.previous_price ??
-          value.previous_decimal_odds ??
-          value.previous_odds ??
-          previous,
-        value.movement ??
-          movement
+        value.price ?? value.decimal_odds ?? value.odds,
+        value.previous_price ?? value.previous_decimal_odds ?? value.previous_odds ?? previous,
+        value.movement ?? movement
       ];
     }
-
-    return [
-      value,
-      previous,
-      movement
-    ];
+    return [value, previous, movement];
   };
 
-  const [
-    homeOdds,
-    homePrev,
-    homeMove
-  ] = officialValue(
-    mw.home ??
-      root.home_win ??
-      root.home,
-    root.previous_home_win ??
-      root.previous_home,
+  const [homeOdds, homePrev, homeMove] = officialValue(
+    mw.home ?? root.home_win ?? root.home,
+    root.previous_home_win ?? root.previous_home,
     root.movement_home
   );
 
-  const [
-    drawOdds,
-    drawPrev,
-    drawMove
-  ] = officialValue(
+  const [drawOdds, drawPrev, drawMove] = officialValue(
     mw.draw ?? root.draw,
     root.previous_draw,
     root.movement_draw
   );
 
-  const [
-    awayOdds,
-    awayPrev,
-    awayMove
-  ] = officialValue(
-    mw.away ??
-      root.away_win ??
-      root.away,
+  const [awayOdds, awayPrev, awayMove] = officialValue(
+    mw.away ?? root.away_win ?? root.away,
     root.previous_away,
     root.movement_away
   );
 
-  push(
-    "HOME",
-    homeOdds,
-    homePrev,
-    homeMove
-  );
+  push("HOME", homeOdds, homePrev, homeMove);
+  push("DRAW", drawOdds, drawPrev, drawMove);
+  push("AWAY", awayOdds, awayPrev, awayMove);
 
-  push(
-    "DRAW",
-    drawOdds,
-    drawPrev,
-    drawMove
-  );
-
-  push(
-    "AWAY",
-    awayOdds,
-    awayPrev,
-    awayMove
-  );
-
-  const [
-    over15,
-    over15Prev,
-    over15Move
-  ] = officialValue(
-    ou.over_15 ??
-      root.over_15_goals ??
-      root.over15,
+  const [over15, over15Prev, over15Move] = officialValue(
+    ou.over_15 ?? root.over_15_goals ?? root.over15,
     root.previous_over_15,
     root.movement_over_15
   );
 
-  const [
-    over25,
-    over25Prev,
-    over25Move
-  ] = officialValue(
-    ou.over_25 ??
-      root.over_25_goals ??
-      root.over25,
+  const [over25, over25Prev, over25Move] = officialValue(
+    ou.over_25 ?? root.over_25_goals ?? root.over25,
     root.previous_over_25,
     root.movement_over_25
   );
 
-  const [
-    under25,
-    under25Prev,
-    under25Move
-  ] = officialValue(
-    ou.under_25 ??
-      root.under_25_goals ??
-      root.under25,
+  const [under25, under25Prev, under25Move] = officialValue(
+    ou.under_25 ?? root.under_25_goals ?? root.under25,
     root.previous_under_25,
     root.movement_under_25
   );
 
-  const [
-    under35,
-    under35Prev,
-    under35Move
-  ] = officialValue(
-    ou.under_35 ??
-      root.under_35_goals ??
-      root.under35,
+  const [under35, under35Prev, under35Move] = officialValue(
+    ou.under_35 ?? root.under_35_goals ?? root.under35,
     root.previous_under_35,
     root.movement_under_35
   );
 
-  push(
-    "OVER15",
-    over15,
-    over15Prev,
-    over15Move
-  );
+  push("OVER15", over15, over15Prev, over15Move);
+  push("OVER25", over25, over25Prev, over25Move);
+  push("UNDER25", under25, under25Prev, under25Move);
+  push("UNDER35", under35, under35Prev, under35Move);
 
-  push(
-    "OVER25",
-    over25,
-    over25Prev,
-    over25Move
-  );
-
-  push(
-    "UNDER25",
-    under25,
-    under25Prev,
-    under25Move
-  );
-
-  push(
-    "UNDER35",
-    under35,
-    under35Prev,
-    under35Move
-  );
-
-  push(
-    "BTTS_YES",
-    bt.yes ?? root.btts_yes,
-    root.previous_btts_yes,
-    root.movement_btts_yes
-  );
-
-  push(
-    "BTTS_NO",
-    bt.no ?? root.btts_no,
-    root.previous_btts_no,
-    root.movement_btts_no
-  );
+  push("BTTS_YES", bt.yes ?? root.btts_yes, root.previous_btts_yes, root.movement_btts_yes);
+  push("BTTS_NO", bt.no ?? root.btts_no, root.previous_btts_no, root.movement_btts_no);
 
   for (const row of collection(data)) {
     const key = marketKey(
-      row.market ??
-        row.market_code ??
-        row.kind ??
-        row.type,
-      row.line ??
-        row.market_line,
-      row.selection ??
-        row.outcome ??
-        row.outcome_name ??
-        row.name
+      row.market ?? row.market_code ?? row.kind ?? row.type,
+      row.line ?? row.market_line,
+      row.selection ?? row.outcome ?? row.outcome_name ?? row.name
     );
 
     push(
       key,
-      row.decimal_odds ??
-        row.price ??
-        row.odds ??
-        row.value,
-      row.previous_decimal_odds ??
-        row.previous_price ??
-        row.previous_odds ??
-        row.previousOdds,
+      row.decimal_odds ?? row.price ?? row.odds ?? row.value,
+      row.previous_decimal_odds ?? row.previous_price ?? row.previous_odds ?? row.previousOdds,
       row.movement,
       {
-        bookmaker:
-          row.bookmaker ??
-          row.bookmaker_name ??
-          row.bookmakerName ??
-          null,
-        isMaxQuote:
-          row.is_max_quote === true ||
-          row.isMaxQuote === true ||
-          row.best === true,
-        capturedAt:
-          row.updated_at ??
-          row.captured_at ??
-          null,
-        line: num(
-          row.line ??
-            row.market_line
-        )
+        bookmaker: row.bookmaker ?? row.bookmaker_name ?? row.bookmakerName ?? null,
+        isMaxQuote: row.is_max_quote === true || row.isMaxQuote === true || row.best === true,
+        capturedAt: row.updated_at ?? row.captured_at ?? null,
+        line: num(row.line ?? row.market_line)
       }
     );
   }
 
   for (const book of arr(data.bookmakers)) {
-    const name =
-      book.bookmaker ??
-      book.bookmaker_name ??
-      book.bookmakerName ??
-      book.bookie ??
-      null;
-
-    push(
-      "HOME",
-      book.odds_home,
-      book.previous_odds_home,
-      book.movement_home,
-      { bookmaker: name }
-    );
-
-    push(
-      "DRAW",
-      book.odds_draw,
-      book.previous_odds_draw,
-      book.movement_draw,
-      { bookmaker: name }
-    );
-
-    push(
-      "AWAY",
-      book.odds_away,
-      book.previous_odds_away,
-      book.movement_away,
-      { bookmaker: name }
-    );
+    const name = book.bookmaker ?? book.bookmaker_name ?? book.bookmakerName ?? book.bookie ?? null;
+    push("HOME", book.odds_home, book.previous_odds_home, book.movement_home, { bookmaker: name });
+    push("DRAW", book.odds_draw, book.previous_odds_draw, book.movement_draw, { bookmaker: name });
+    push("AWAY", book.odds_away, book.previous_odds_away, book.movement_away, { bookmaker: name });
   }
 
   for (const market of arr(data.markets)) {
-    const kind =
-      market.market_kind ??
-      market.kind ??
-      market.market ??
-      market.type;
-
-    const line =
-      market.market_line ??
-      market.line;
-
-    const period = String(
-      market.market_period ??
-      market.period ??
-      "FT"
-    ).toUpperCase();
-
+    const kind = market.market_kind ?? market.kind ?? market.market ?? market.type;
+    const line = market.market_line ?? market.line;
+    const period = String(market.market_period ?? market.period ?? "FT").toUpperCase();
     if (period !== "FT") continue;
 
     for (const book of arr(market.bookmakers)) {
-      const name =
-        book.bookmaker ??
-        book.bookmaker_name ??
-        book.bookmaker_slug ??
-        null;
+      const name = book.bookmaker ?? book.bookmaker_name ?? book.bookmaker_slug ?? null;
+      const prices = book.prices || book.odds || {};
 
-      const prices =
-        book.prices ||
-        book.odds ||
-        {};
-
-      for (
-        const [selection, value]
-        of Object.entries(prices)
-      ) {
-        const v =
-          value &&
-          typeof value === "object"
-            ? value
-            : {};
+      for (const [selection, value] of Object.entries(prices)) {
+        const v = value && typeof value === "object" ? value : {};
 
         push(
-          marketKey(
-            kind,
-            line,
-            selection
-          ),
-          v.price ??
-            v.decimal_odds ??
-            v.odds ??
-            (
-              typeof value === "number"
-                ? value
-                : null
-            ),
-          v.previous_price ??
-            v.previous_decimal_odds ??
-            v.previous_odds,
+          marketKey(kind, line, selection),
+          v.price ?? v.decimal_odds ?? v.odds ?? (typeof value === "number" ? value : null),
+          v.previous_price ?? v.previous_decimal_odds ?? v.previous_odds,
           v.movement,
-          {
-            bookmaker: name,
-            line: num(line)
-          }
+          { bookmaker: name, line: num(line) }
         );
       }
     }
@@ -1233,15 +435,8 @@ function extractOdds(data) {
     const seen = new Set();
 
     out[key] = out[key].filter(row => {
-      const id =
-        `${row.bookmaker || "CONSENSUS"}|` +
-        `${row.odds}|` +
-        `${row.previousOdds ?? ""}|` +
-        `${row.line ?? ""}`;
-
-      if (seen.has(id))
-        return false;
-
+      const id = `${row.bookmaker || "CONSENSUS"}|${row.odds}|${row.previousOdds ?? ""}|${row.line ?? ""}`;
+      if (seen.has(id)) return false;
       seen.add(id);
       return true;
     });
@@ -1251,11 +446,7 @@ function extractOdds(data) {
 }
 
 function movementFor(rows) {
-  const valid = arr(rows).filter(
-    x =>
-      num(x.odds) > 1 &&
-      num(x.previousOdds) > 1
-  );
+  const valid = arr(rows).filter(x => num(x.odds) > 1 && num(x.previousOdds) > 1);
 
   if (!valid.length) {
     return {
@@ -1267,113 +458,63 @@ function movementFor(rows) {
   }
 
   const changes = valid.map(
-    x =>
-      ((x.odds - x.previousOdds) /
-        x.previousOdds) *
-      100
+    x => (x.odds - x.previousOdds) / x.previousOdds * 100
   );
 
-  const avg =
-    changes.reduce(
-      (a, b) => a + b,
-      0
-    ) / changes.length;
-
-  const shortening =
-    changes.filter(
-      x => x < -0.15
-    ).length;
-
-  const drifting =
-    changes.filter(
-      x => x > 0.15
-    ).length;
+  const avg = changes.reduce((a, b) => a + b, 0) / changes.length;
+  const shortening = changes.filter(x => x < -0.15).length;
+  const drifting = changes.filter(x => x > 0.15).length;
 
   const movement =
-    shortening > drifting &&
-    avg < -0.15
+    shortening > drifting && avg < -0.15
       ? "SHORTENING"
-      : drifting > shortening &&
-          avg > 0.15
+      : drifting > shortening && avg > 0.15
         ? "DRIFTING"
         : "STABLE";
 
   return {
     movement,
     samples: valid.length,
-    changePercent: Number(
-      avg.toFixed(2)
-    ),
+    changePercent: Number(avg.toFixed(2)),
     confidence: Math.round(
-      Math.max(
-        shortening,
-        drifting
-      ) /
-        valid.length *
-        100
+      Math.max(shortening, drifting) / valid.length * 100
     )
   };
 }
 
 function bestQuote(rows) {
-  const valid = arr(rows).filter(
-    x => num(x.odds) > 1
-  );
-
-  if (!valid.length)
-    return null;
+  const valid = arr(rows).filter(x => num(x.odds) > 1);
+  if (!valid.length) return null;
 
   return valid.reduce(
-    (best, row) =>
-      !best ||
-      row.odds > best.odds
-        ? row
-        : best,
+    (best, row) => !best || row.odds > best.odds ? row : best,
     null
   );
 }
 
 function marketProb(prediction, key) {
-  if (key === "HOME")
-    return prediction.home;
+  if (key === "HOME") return prediction.home;
+  if (key === "DRAW") return prediction.draw;
+  if (key === "AWAY") return prediction.away;
 
-  if (key === "DRAW")
-    return prediction.draw;
-
-  if (key === "AWAY")
-    return prediction.away;
-
-  if (key === "DC1X")
-    return prediction.home !== null &&
-      prediction.draw !== null
-      ? prediction.home +
-        prediction.draw
+  if (key === "DC1X") {
+    return prediction.home !== null && prediction.draw !== null
+      ? prediction.home + prediction.draw
       : null;
+  }
 
-  if (key === "DCX2")
-    return prediction.draw !== null &&
-      prediction.away !== null
-      ? prediction.draw +
-        prediction.away
+  if (key === "DCX2") {
+    return prediction.draw !== null && prediction.away !== null
+      ? prediction.draw + prediction.away
       : null;
+  }
 
-  if (key === "OVER15")
-    return prediction.over15;
-
-  if (key === "OVER25")
-    return prediction.over25;
-
-  if (key === "UNDER25")
-    return prediction.under25;
-
-  if (key === "UNDER35")
-    return prediction.under35;
-
-  if (key === "BTTS")
-    return prediction.btts;
-
-  if (key === "BTTS_NO")
-    return prediction.bttsNo;
+  if (key === "OVER15") return prediction.over15;
+  if (key === "OVER25") return prediction.over25;
+  if (key === "UNDER25") return prediction.under25;
+  if (key === "UNDER35") return prediction.under35;
+  if (key === "BTTS") return prediction.btts;
+  if (key === "BTTS_NO") return prediction.bttsNo;
 
   return null;
 }
@@ -1384,68 +525,39 @@ function womKey(row) {
     row?.market_code ??
     row?.market_type ??
     ""
-  )
-    .toUpperCase()
-    .trim();
+  ).toUpperCase().trim();
 
-  const code =
-    norm(raw).replace(/\./g, "");
+  const code = norm(raw).replace(/\./g, "");
 
-  if (/^1X2HOME/.test(code))
-    return "HOME";
+  if (/^1X2HOME/.test(code)) return "HOME";
+  if (/^1X2DRAW/.test(code)) return "DRAW";
+  if (/^1X2AWAY/.test(code)) return "AWAY";
 
-  if (/^1X2DRAW/.test(code))
-    return "DRAW";
+  if (/^OU15OVER/.test(code)) return "OVER15";
+  if (/^OU15UNDER/.test(code)) return "UNDER15";
+  if (/^OU25OVER/.test(code)) return "OVER25";
+  if (/^OU25UNDER/.test(code)) return "UNDER25";
+  if (/^OU35UNDER/.test(code)) return "UNDER35";
 
-  if (/^1X2AWAY/.test(code))
-    return "AWAY";
+  if (/^BTTSYES/.test(code)) return "BTTS_YES";
+  if (/^BTTSNO/.test(code)) return "BTTS_NO";
 
-  if (/^OU15OVER/.test(code))
-    return "OVER15";
-
-  if (/^OU15UNDER/.test(code))
-    return "UNDER15";
-
-  if (/^OU25OVER/.test(code))
-    return "OVER25";
-
-  if (/^OU25UNDER/.test(code))
-    return "UNDER25";
-
-  if (/^OU35UNDER/.test(code))
-    return "UNDER35";
-
-  if (/^BTTSYES/.test(code))
-    return "BTTS_YES";
-
-  if (/^BTTSNO/.test(code))
-    return "BTTS_NO";
-
-  return marketKey(
-    raw,
-    row?.line,
-    row?.selection
-  );
+  return marketKey(raw, row?.line, row?.selection);
 }
 
 function findWom(wom, key) {
   if (!wom?.connected) {
     return {
       usable: false,
-      status:
-        wom?.status ||
-        "NOT_CONNECTED"
+      status: wom?.status || "NOT_CONNECTED"
     };
   }
 
-  const womRows =
-    arr(wom.markets).length
-      ? arr(wom.markets)
-      : normalizeWomData(wom);
+  const womRows = arr(wom.markets).length
+    ? arr(wom.markets)
+    : normalizeWomData(wom);
 
-  const row = womRows.find(
-    x => womKey(x) === key
-  );
+  const row = womRows.find(x => womKey(x) === key);
 
   if (!row) {
     return {
@@ -1505,10 +617,7 @@ function findWom(wom, key) {
 
   const divergence =
     num(row.divergence) ??
-    (
-      share -
-      impliedProbability
-    );
+    (share - impliedProbability);
 
   return {
     usable: true,
@@ -1516,9 +625,7 @@ function findWom(wom, key) {
     volume,
     share,
     impliedProbability,
-    divergence: Number(
-      divergence.toFixed(2)
-    ),
+    divergence: Number(divergence.toFixed(2)),
     price: num(
       row.price ??
       row.current_price ??
@@ -1529,16 +636,15 @@ function findWom(wom, key) {
       row.previous_price ??
       row.previousPrice
     ),
-    priceMovement:
-      normalizeMovement(
-        null,
-        row.price ??
-          row.current_price ??
-          row.currentPrice,
-        row.previousPrice ??
-          row.previous_price ??
-          row.previousPrice
-      ),
+    priceMovement: normalizeMovement(
+      null,
+      row.price ??
+      row.current_price ??
+      row.currentPrice,
+      row.previousPrice ??
+      row.previous_price ??
+      row.previousPrice
+    ),
     capturedAt:
       row.capturedAt ??
       row.captured_at ??
@@ -1547,37 +653,19 @@ function findWom(wom, key) {
 }
 
 function exchangeScoreBonus(exchange) {
-  if (!exchange?.usable)
-    return 0;
+  if (!exchange?.usable) return 0;
 
   let bonus = 0;
 
-  if (exchange.divergence >= 15)
-    bonus += 6;
-  else if (exchange.divergence >= 10)
-    bonus += 4;
-  else if (exchange.divergence >= 5)
-    bonus += 2;
-  else if (exchange.divergence <= -15)
-    bonus -= 6;
-  else if (exchange.divergence <= -10)
-    bonus -= 4;
-  else if (exchange.divergence <= -5)
-    bonus -= 2;
+  if (exchange.divergence >= 15) bonus += 6;
+  else if (exchange.divergence >= 10) bonus += 4;
+  else if (exchange.divergence >= 5) bonus += 2;
+  else if (exchange.divergence <= -15) bonus -= 6;
+  else if (exchange.divergence <= -10) bonus -= 4;
+  else if (exchange.divergence <= -5) bonus -= 2;
 
-  if (
-    exchange.priceMovement ===
-    "SHORTENING"
-  ) {
-    bonus += 2;
-  }
-
-  if (
-    exchange.priceMovement ===
-    "DRIFTING"
-  ) {
-    bonus -= 3;
-  }
+  if (exchange.priceMovement === "SHORTENING") bonus += 2;
+  if (exchange.priceMovement === "DRIFTING") bonus -= 3;
 
   return bonus;
 }
@@ -1585,204 +673,123 @@ function exchangeScoreBonus(exchange) {
 function score(candidate) {
   let value = 50;
 
-  if (candidate.probability >= 90)
-    value += 18;
-  else if (candidate.probability >= 85)
-    value += 15;
-  else if (candidate.probability >= 80)
-    value += 12;
-  else if (candidate.probability >= 75)
-    value += 8;
-  else if (candidate.probability >= 70)
-    value += 4;
+  if (candidate.probability >= 90) value += 18;
+  else if (candidate.probability >= 85) value += 15;
+  else if (candidate.probability >= 80) value += 12;
+  else if (candidate.probability >= 75) value += 8;
+  else if (candidate.probability >= 70) value += 4;
 
-  if (candidate.edge >= 8)
-    value += 12;
-  else if (candidate.edge >= 5)
-    value += 9;
-  else if (candidate.edge >= 3)
-    value += 6;
-  else if (candidate.edge >= 1.5)
-    value += 3;
+  if (candidate.edge >= 8) value += 12;
+  else if (candidate.edge >= 5) value += 9;
+  else if (candidate.edge >= 3) value += 5;
+  else if (candidate.edge >= 2) value += 2;
 
-  if (
-    candidate.marketMovement?.movement ===
-    "SHORTENING"
-  ) {
-    value += 5;
+  if (candidate.marketMovement.movement === "SHORTENING") value += 7;
+  if (candidate.marketMovement.movement === "DRIFTING") value -= 25;
+
+  if (candidate.confidence !== null) {
+    if (candidate.confidence >= 90) value += 5;
+    else if (candidate.confidence >= 80) value += 3;
   }
 
-  if (
-    candidate.marketMovement?.movement ===
-    "DRIFTING"
-  ) {
-    value -= 8;
-  }
+  if (candidate.context?.lineupQuality === "CONFIRMED") value += 3;
+  else if (candidate.context?.lineupQuality === "PREDICTED") value += 1;
 
   if (
-    candidate.confidence !== null &&
-    candidate.confidence !== undefined
-  ) {
-    if (candidate.confidence >= 90)
-      value += 5;
-    else if (candidate.confidence >= 80)
-      value += 3;
-    else if (candidate.confidence < 60)
-      value -= 3;
-  }
-
-  value += exchangeScoreBonus(
-    candidate.exchange
-  );
+    candidate.context?.form?.signal === "HOME" &&
+    ["HOME", "DC1X"].includes(candidate.key)
+  ) value += 3;
 
   if (
-    candidate.context?.lineupQuality ===
-    "CONFIRMED"
-  ) {
-    value += 2;
-  }
+    candidate.context?.form?.signal === "AWAY" &&
+    ["AWAY", "DCX2"].includes(candidate.key)
+  ) value += 3;
 
   if (
-    candidate.context?.statsSignal ===
-    "SUPPORTS"
-  ) {
-    value += 2;
-  }
+    candidate.context?.form?.signal === "HOME" &&
+    ["AWAY", "DCX2"].includes(candidate.key)
+  ) value -= 3;
 
   if (
-    candidate.context?.h2hSignal ===
-    "SUPPORTS"
-  ) {
-    value += 1;
-  }
+    candidate.context?.form?.signal === "AWAY" &&
+    ["HOME", "DC1X"].includes(candidate.key)
+  ) value -= 3;
 
-  if (
-    candidate.context?.statsSignal ===
-    "CONTRADICTS"
-  ) {
-    value -= 2;
-  }
+  const formGap = num(candidate.context?.form?.pointsGap);
+  if (formGap !== null) value += clamp(formGap, -3, 3);
 
-  if (
-    candidate.context?.h2hSignal ===
-    "CONTRADICTS"
-  ) {
-    value -= 1;
-  }
+  if (candidate.context?.h2hSignal === "SUPPORTS") value += 2;
+  if (candidate.context?.h2hSignal === "CONTRADICTS") value -= 2;
 
-  return clamp(
-    Math.round(value),
-    0,
-    100
-  );
+  if (candidate.context?.statsSignal === "SUPPORTS") value += 3;
+  if (candidate.context?.statsSignal === "CONTRADICTS") value -= 3;
+
+  if (candidate.context?.refereeSignal === "SUPPORTS") value += 1;
+  if (candidate.context?.refereeSignal === "CONTRADICTS") value -= 1;
+
+  if (candidate.context?.unavailable?.total >= 3) value -= 2;
+
+  value += exchangeScoreBonus(candidate.exchange);
+
+  return Math.round(clamp(value, 0, 100));
 }
 
-function candidates(
-  prediction,
-  markets,
-  wom
-) {
+function candidates(prediction, markets, wom = null) {
   const defs = [
-    ["DC1X", "1X"],
-    ["DCX2", "X2"],
-    ["OVER15", "Over 1.5"],
-    ["UNDER35", "Under 3.5"],
-    ["BTTS", "BTTS"],
-    ["BTTS_NO", "BTTS No"],
-    ["OVER25", "Over 2.5"],
-    ["UNDER25", "Under 2.5"],
-    ["HOME", "Home"],
-    ["AWAY", "Away"],
-    ["DRAW", "Draw"]
+    ["DC1X","1X"],
+    ["DCX2","X2"],
+    ["OVER15","Over 1.5"],
+    ["UNDER35","Under 3.5"],
+    ["BTTS","BTTS"],
+    ["BTTS_NO","BTTS No"],
+    ["OVER25","Over 2.5"],
+    ["UNDER25","Under 2.5"],
+    ["HOME","Home"],
+    ["AWAY","Away"],
+    ["DRAW","Draw"]
   ];
 
-  return defs.flatMap(
-    ([key, label]) => {
-      const probability =
-        marketProb(
-          prediction,
-          key
-        );
+  return defs.flatMap(([key, label]) => {
+    const probability = marketProb(prediction, key);
 
-      const quote = bestQuote(
-        markets[
-          key === "BTTS"
-            ? "BTTS_YES"
-            : key
-        ]
-      );
+    const quote = bestQuote(
+      markets[key === "BTTS" ? "BTTS_YES" : key]
+    );
 
-      if (
-        probability === null ||
-        !quote
-      ) {
-        return [];
-      }
+    if (probability === null || !quote) return [];
 
-      const e = edge(
-        probability,
-        quote.odds
-      );
+    const e = edge(probability, quote.odds);
+    if (e === null) return [];
 
-      if (e === null)
-        return [];
+    const candidate = {
+      key,
+      label,
+      probability: Number(probability.toFixed(2)),
+      odds: Number(quote.odds.toFixed(3)),
+      previousOdds: quote.previousOdds,
+      impliedProbability: Number(implied(quote.odds).toFixed(2)),
+      edge: Number(e.toFixed(2)),
+      confidence: prediction.confidence,
+      score: 0,
+      bookmaker: quote.bookmaker || "BEST_AVAILABLE",
+      marketMovement: movementFor(
+        markets[key === "BTTS" ? "BTTS_YES" : key]
+      ),
+      exchange: findWom(
+        wom,
+        key === "BTTS" ? "BTTS_YES" : key
+      ),
+      context: {}
+    };
 
-      const candidate = {
-        key,
-        label,
-        probability: Number(
-          probability.toFixed(2)
-        ),
-        odds: Number(
-          quote.odds.toFixed(3)
-        ),
-        previousOdds:
-          quote.previousOdds,
-        impliedProbability: Number(
-          implied(
-            quote.odds
-          ).toFixed(2)
-        ),
-        edge: Number(
-          e.toFixed(2)
-        ),
-        confidence:
-          prediction.confidence,
-        score: 0,
-        bookmaker:
-          quote.bookmaker ||
-          "BEST_AVAILABLE",
-        marketMovement:
-          movementFor(
-            markets[
-              key === "BTTS"
-                ? "BTTS_YES"
-                : key
-            ]
-          ),
-        exchange:
-          findWom(
-            wom,
-            key === "BTTS"
-              ? "BTTS_YES"
-              : key
-          ),
-        context: {}
-      };
+    candidate.score = score(candidate);
 
-      candidate.score =
-        score(candidate);
-
-      return [candidate];
-    }
-  );
+    return [candidate];
+  });
 }
 
 function summarizeLineups(data) {
-  if (
-    !data ||
-    typeof data !== "object"
-  ) {
+  if (!data || typeof data !== "object") {
     return {
       quality: "NONE",
       confirmed: false,
@@ -1792,39 +799,17 @@ function summarizeLineups(data) {
   }
 
   const rows = collection(data);
-
-  const serialized =
-    JSON.stringify(data)
-      .toLowerCase();
-
-  const players =
-    (
-      serialized.match(
-        /player/g
-      ) || []
-    ).length;
-
+  const serialized = JSON.stringify(data).toLowerCase();
+  const players = (serialized.match(/player/g) || []).length;
   const confirmed =
-    serialized.includes(
-      "confirmed"
-    ) ||
-    serialized.includes(
-      "starting_xi"
-    ) ||
-    serialized.includes(
-      "startingxi"
-    );
+    serialized.includes("confirmed") ||
+    serialized.includes("starting_xi") ||
+    serialized.includes("startingxi");
 
   const predicted =
-    serialized.includes(
-      "predicted"
-    ) ||
-    serialized.includes(
-      "ai-predicted"
-    ) ||
-    serialized.includes(
-      "expected"
-    );
+    serialized.includes("predicted") ||
+    serialized.includes("ai-predicted") ||
+    serialized.includes("expected");
 
   return {
     quality:
@@ -1832,8 +817,7 @@ function summarizeLineups(data) {
         ? "CONFIRMED"
         : predicted
           ? "PREDICTED"
-          : rows.length ||
-              players
+          : rows.length || players
             ? "AVAILABLE"
             : "NONE",
     confirmed,
@@ -1866,11 +850,8 @@ function summarizeUnavailable(detail) {
     };
   }
 
-  const home =
-    arr(u.home).length;
-
-  const away =
-    arr(u.away).length;
+  const home = arr(u.home).length;
+  const away = arr(u.away).length;
 
   return {
     available: true,
@@ -1880,16 +861,9 @@ function summarizeUnavailable(detail) {
   };
 }
 
-function summarizeForm(
-  data,
-  teamId
-) {
+function summarizeForm(data, teamId) {
   const rows = collection(data)
-    .filter(
-      x =>
-        status(x) ===
-        "finished"
-    )
+    .filter(x => status(x) === "finished")
     .sort(
       (a, b) =>
         (
@@ -1918,11 +892,8 @@ function summarizeForm(
   let goalsAgainst = 0;
 
   for (const row of rows) {
-    const event =
-      normalizeEvent(row);
-
-    if (!event)
-      continue;
+    const event = normalizeEvent(row);
+    if (!event) continue;
 
     const homeScore = num(
       row.home_score ??
@@ -1940,29 +911,15 @@ function summarizeForm(
       row.result?.away
     );
 
-    if (
-      homeScore === null ||
-      awayScore === null
-    ) {
-      continue;
-    }
+    if (homeScore === null || awayScore === null) continue;
 
-    const isHome =
-      event.home.id === teamId;
+    const isHome = event.home.id === teamId;
+    const isAway = event.away.id === teamId;
 
-    const isAway =
-      event.away.id === teamId;
+    if (!isHome && !isAway) continue;
 
-    if (!isHome && !isAway)
-      continue;
-
-    const gf = isHome
-      ? homeScore
-      : awayScore;
-
-    const ga = isHome
-      ? awayScore
-      : homeScore;
+    const gf = isHome ? homeScore : awayScore;
+    const ga = isHome ? awayScore : homeScore;
 
     const result =
       gf > ga
@@ -1978,12 +935,9 @@ function summarizeForm(
           ? 1
           : 0;
 
-    goalDifference +=
-      gf - ga;
-
+    goalDifference += gf - ga;
     goalsFor += gf;
     goalsAgainst += ga;
-
     form.push(result);
   }
 
@@ -1995,12 +949,7 @@ function summarizeForm(
     goalsFor,
     goalsAgainst,
     ppg: form.length
-      ? Number(
-          (
-            points /
-            form.length
-          ).toFixed(2)
-        )
+      ? Number((points / form.length).toFixed(2))
       : 0
   };
 }
@@ -2016,26 +965,14 @@ async function getTeamForm(teamId) {
   }
 
   const data = await safe(
-    `/teams/${encodeURIComponent(
-      teamId
-    )}/fixtures/?status=finished&limit=10`
+    `/teams/${encodeURIComponent(teamId)}/fixtures/?status=finished&limit=10`
   );
 
-  return summarizeForm(
-    data,
-    teamId
-  );
+  return summarizeForm(data, teamId);
 }
 
-function numericStat(
-  data,
-  keys
-) {
-  const wanted =
-    new Set(
-      keys.map(k => norm(k))
-    );
-
+function numericStat(data, keys) {
+  const wanted = new Set(keys.map(k => norm(k)));
   let found = null;
 
   const walk = value => {
@@ -2043,26 +980,16 @@ function numericStat(
       found !== null ||
       value === null ||
       value === undefined
-    ) {
-      return;
-    }
+    ) return;
 
     if (Array.isArray(value)) {
-      for (const item of value)
-        walk(item);
+      for (const item of value) walk(item);
       return;
     }
 
-    if (
-      typeof value !== "object"
-    ) {
-      return;
-    }
+    if (typeof value !== "object") return;
 
-    for (
-      const [k, v]
-      of Object.entries(value)
-    ) {
+    for (const [k, v] of Object.entries(value)) {
       if (
         wanted.has(norm(k)) &&
         num(v) !== null
@@ -2076,65 +1003,37 @@ function numericStat(
   };
 
   walk(data);
-
   return found;
 }
 
-function contextSignal(
-  candidateKey,
-  homeValue,
-  awayValue
-) {
+function contextSignal(candidateKey, homeValue, awayValue) {
   if (
     homeValue === null ||
     awayValue === null
-  ) {
-    return "NEUTRAL";
-  }
+  ) return "NEUTRAL";
 
-  const homeFav =
-    homeValue >
-    awayValue + 0.05;
-
-  const awayFav =
-    awayValue >
-    homeValue + 0.05;
+  const homeFav = homeValue > awayValue + 0.05;
+  const awayFav = awayValue > homeValue + 0.05;
 
   if (
     homeFav &&
-    ["HOME", "DC1X"].includes(
-      candidateKey
-    )
-  ) {
-    return "SUPPORTS";
-  }
+    ["HOME","DC1X"].includes(candidateKey)
+  ) return "SUPPORTS";
 
   if (
     awayFav &&
-    ["AWAY", "DCX2"].includes(
-      candidateKey
-    )
-  ) {
-    return "SUPPORTS";
-  }
+    ["AWAY","DCX2"].includes(candidateKey)
+  ) return "SUPPORTS";
 
   if (
     homeFav &&
-    ["AWAY", "DCX2"].includes(
-      candidateKey
-    )
-  ) {
-    return "CONTRADICTS";
-  }
+    ["AWAY","DCX2"].includes(candidateKey)
+  ) return "CONTRADICTS";
 
   if (
     awayFav &&
-    ["HOME", "DC1X"].includes(
-      candidateKey
-    )
-  ) {
-    return "CONTRADICTS";
-  }
+    ["HOME","DC1X"].includes(candidateKey)
+  ) return "CONTRADICTS";
 
   return "NEUTRAL";
 }
@@ -2146,49 +1045,45 @@ function summarizeContextSignals(
   homeForm,
   awayForm
 ) {
-  const homeXg =
-    numericStat(
-      stats,
-      [
-        "home_xg",
-        "xg_home",
-        "expected_goals_home",
-        "homeExpectedGoals"
-      ]
-    );
+  const homeXg = numericStat(
+    stats,
+    [
+      "home_xg",
+      "xg_home",
+      "expected_goals_home",
+      "homeExpectedGoals"
+    ]
+  );
 
-  const awayXg =
-    numericStat(
-      stats,
-      [
-        "away_xg",
-        "xg_away",
-        "expected_goals_away",
-        "awayExpectedGoals"
-      ]
-    );
+  const awayXg = numericStat(
+    stats,
+    [
+      "away_xg",
+      "xg_away",
+      "expected_goals_away",
+      "awayExpectedGoals"
+    ]
+  );
 
-  const h2hHome =
-    numericStat(
-      h2h,
-      [
-        "home_win_probability",
-        "home_win_pct",
-        "home_percentage",
-        "home_wins"
-      ]
-    );
+  const h2hHome = numericStat(
+    h2h,
+    [
+      "home_win_probability",
+      "home_win_pct",
+      "home_percentage",
+      "home_wins"
+    ]
+  );
 
-  const h2hAway =
-    numericStat(
-      h2h,
-      [
-        "away_win_probability",
-        "away_win_pct",
-        "away_percentage",
-        "away_wins"
-      ]
-    );
+  const h2hAway = numericStat(
+    h2h,
+    [
+      "away_win_probability",
+      "away_win_pct",
+      "away_percentage",
+      "away_wins"
+    ]
+  );
 
   const statsSignal =
     contextSignal(
@@ -2219,24 +1114,12 @@ async function enrichEvent(event) {
     homeForm,
     awayForm
   ] = await Promise.all([
-    safe(
-      `/events/${event.id}/`
-    ),
-    safe(
-      `/events/${event.id}/lineups/`
-    ),
-    safe(
-      `/events/${event.id}/stats/`
-    ),
-    safe(
-      `/events/${event.id}/h2h/`
-    ),
-    getTeamForm(
-      event.home.id
-    ),
-    getTeamForm(
-      event.away.id
-    )
+    safe(`/events/${event.id}/`),
+    safe(`/events/${event.id}/lineups/`),
+    safe(`/events/${event.id}/stats/`),
+    safe(`/events/${event.id}/h2h/`),
+    getTeamForm(event.home.id),
+    getTeamForm(event.away.id)
   ]);
 
   const referee =
@@ -2246,41 +1129,30 @@ async function enrichEvent(event) {
     null;
 
   const signal =
-    homeForm.points ===
-    awayForm.points
+    homeForm.points === awayForm.points
       ? "EVEN"
-      : homeForm.points >
-          awayForm.points
+      : homeForm.points > awayForm.points
         ? "HOME"
         : "AWAY";
 
   return {
-    refereeKnown:
-      Boolean(referee),
+    refereeKnown: Boolean(referee),
     referee,
-    lineup:
-      summarizeLineups(
-        lineups
-      ),
-    statsAvailable:
-      Boolean(stats),
-    h2hAvailable:
-      Boolean(h2h),
-    detailAvailable:
-      Boolean(detail),
+    lineup: summarizeLineups(lineups),
+    statsAvailable: Boolean(stats),
+    h2hAvailable: Boolean(h2h),
+    detailAvailable: Boolean(detail),
     stats,
     h2h,
-    unavailable:
-      summarizeUnavailable(
-        detail ?? event.raw
-      ),
+    unavailable: summarizeUnavailable(
+      detail ?? event.raw
+    ),
     form: {
       home: homeForm,
       away: awayForm,
       signal,
       pointsGap:
-        homeForm.ppg -
-        awayForm.ppg
+        homeForm.ppg - awayForm.ppg
     }
   };
 }
@@ -2290,21 +1162,13 @@ function normalizeWomData(data) {
   const seen = new Set();
 
   const visit = value => {
-    if (
-      !value ||
-      typeof value !== "object"
-    ) {
-      return;
-    }
-
-    if (seen.has(value))
-      return;
+    if (!value || typeof value !== "object") return;
+    if (seen.has(value)) return;
 
     seen.add(value);
 
     if (Array.isArray(value)) {
-      for (const item of value)
-        visit(item);
+      for (const item of value) visit(item);
       return;
     }
 
@@ -2316,29 +1180,19 @@ function normalizeWomData(data) {
       out.push(value);
     }
 
-    for (
-      const key of [
-        "results",
-        "items",
-        "data",
-        "money",
-        "markets"
-      ]
-    ) {
-      const child =
-        value[key];
-
-      if (
-        child &&
-        child !== value
-      ) {
-        visit(child);
-      }
+    for (const key of [
+      "results",
+      "items",
+      "data",
+      "money",
+      "markets"
+    ]) {
+      const child = value[key];
+      if (child && child !== value) visit(child);
     }
   };
 
   visit(data);
-
   return out;
 }
 
@@ -2353,9 +1207,7 @@ async function getWom(eventId) {
   }
 
   const data = await safe(
-    `/events/${encodeURIComponent(
-      eventId
-    )}/`,
+    `/events/${encodeURIComponent(eventId)}/`,
     { wom: true }
   );
 
@@ -2368,52 +1220,39 @@ async function getWom(eventId) {
     };
   }
 
-  const money =
-    normalizeWomData(data)
-      .filter(
-        x =>
-          num(x.share) !== null &&
-          num(x.price) > 1 &&
-          x.market
-      );
+  const money = normalizeWomData(data).filter(
+    x =>
+      num(x.share) !== null &&
+      num(x.price) > 1 &&
+      x.market
+  );
 
   return {
     connected: true,
     status: "CONNECTED",
     signalUsed: false,
     eventId,
-    totalVolume:
-      num(data.total_volume),
+    totalVolume: num(data.total_volume),
     markets: money.map(x => ({
       market: x.market,
       kind: x.kind ?? null,
       line: x.line ?? null,
-      selection:
-        x.selection ?? null,
-      volume:
-        num(x.volume),
-      share:
-        num(x.share),
-      marketVolume:
-        num(x.market_volume),
-      leagueAvgVolume:
-        num(x.league_avg_volume),
-      price:
-        num(x.price),
-      previousPrice:
-        num(x.previous_price),
+      selection: x.selection ?? null,
+      volume: num(x.volume),
+      share: num(x.share),
+      marketVolume: num(x.market_volume),
+      leagueAvgVolume: num(x.league_avg_volume),
+      price: num(x.price),
+      previousPrice: num(x.previous_price),
       impliedProbability:
-        num(
-          x.implied_probability
-        ) ??
+        num(x.implied_probability) ??
         implied(x.price),
       divergence:
         num(x.divergence) ??
         (
           num(x.share) !== null &&
           implied(x.price) !== null
-            ? num(x.share) -
-              implied(x.price)
+            ? num(x.share) - implied(x.price)
             : null
         ),
       capturedAt:
@@ -2424,31 +1263,19 @@ async function getWom(eventId) {
 
 async function getEvents(date) {
   const d = await safe(
-    `/events/?date_from=${encodeURIComponent(
-      date
-    )}&date_to=${encodeURIComponent(
-      date
-    )}&status=upcoming&limit=200`
+    `/events/?date_from=${encodeURIComponent(date)}&date_to=${encodeURIComponent(date)}&status=upcoming&limit=200`
   );
 
   return collection(d)
     .map(normalizeEvent)
     .filter(Boolean)
-    .filter(
-      e =>
-        e.status ===
-        "notstarted"
-    );
+    .filter(e => e.status === "notstarted");
 }
 
 function mergeOdds(a, b) {
-  const merged =
-    emptyMarkets();
+  const merged = emptyMarkets();
 
-  for (
-    const key of
-    Object.keys(merged)
-  ) {
+  for (const key of Object.keys(merged)) {
     const rows = [
       ...arr(a[key]),
       ...arr(b[key])
@@ -2456,20 +1283,15 @@ function mergeOdds(a, b) {
 
     const seen = new Set();
 
-    merged[key] =
-      rows.filter(row => {
-        const id =
-          `${row.bookmaker || "BEST"}|` +
-          `${row.odds}|` +
-          `${row.previousOdds ?? ""}|` +
-          `${row.line ?? ""}`;
+    merged[key] = rows.filter(row => {
+      const id =
+        `${row.bookmaker || "BEST"}|${row.odds}|${row.previousOdds ?? ""}|${row.line ?? ""}`;
 
-        if (seen.has(id))
-          return false;
+      if (seen.has(id)) return false;
 
-        seen.add(id);
-        return true;
-      });
+      seen.add(id);
+      return true;
+    });
   }
 
   return merged;
@@ -2477,15 +1299,10 @@ function mergeOdds(a, b) {
 
 function qualify(candidate) {
   return (
-    candidate.probability >=
-      MIN_PROBABILITY &&
-    candidate.edge >=
-      MIN_EDGE &&
-    candidate.score >=
-      MIN_SCORE &&
-    candidate.marketMovement
-      .movement !==
-      "DRIFTING"
+    candidate.probability >= MIN_PROBABILITY &&
+    candidate.edge >= MIN_EDGE &&
+    candidate.score >= MIN_SCORE &&
+    candidate.marketMovement.movement !== "DRIFTING"
   );
 }
 
@@ -2494,9 +1311,7 @@ async function analyzeEvent(
   predictionMap
 ) {
   const prediction =
-    predictionMap.get(
-      event.id
-    ) || null;
+    predictionMap.get(event.id) || null;
 
   if (!prediction) {
     return {
@@ -2510,45 +1325,32 @@ async function analyzeEvent(
     oddsRaw,
     oddsFeedRaw
   ] = await Promise.all([
-    safe(
-      `/events/${event.id}/odds/`
-    ),
+    safe(`/events/${event.id}/odds/`),
     safe(
       `/events/${event.id}/?sport=football`,
       { odds: true }
     )
   ]);
 
-  const markets =
-    mergeOdds(
-      extractOdds(
-        oddsRaw
-      ),
-      extractOdds(
-        oddsFeedRaw
-      )
-    );
+  const markets = mergeOdds(
+    extractOdds(oddsRaw),
+    extractOdds(oddsFeedRaw)
+  );
 
   if (
-    !Object.values(
-      markets
-    ).some(
-      rows => rows.length
-    )
+    !Object.values(markets)
+      .some(rows => rows.length)
   ) {
     return {
       event,
       status: "REJECT",
-      reason:
-        "NO_RECOGNIZED_ODDS",
+      reason: "NO_RECOGNIZED_ODDS",
       prediction
     };
   }
 
   const exchange =
-    await getWom(
-      event.id
-    );
+    await getWom(event.id);
 
   const initial =
     candidates(
@@ -2558,9 +1360,7 @@ async function analyzeEvent(
     );
 
   const qualifiedBeforeContext =
-    initial.filter(
-      qualify
-    );
+    initial.filter(qualify);
 
   return {
     event,
@@ -2574,8 +1374,7 @@ async function analyzeEvent(
         : "NO_QUALIFIED_PICK",
     prediction,
     candidates: initial,
-    qualified:
-      qualifiedBeforeContext,
+    qualified: qualifiedBeforeContext,
     exchange,
     markets
   };
@@ -2595,20 +1394,15 @@ async function scan(date) {
       .sort(
         (a, b) =>
           (
-            dateObj(a.date)
-              ?.getTime() ??
+            dateObj(a.date)?.getTime() ??
             Number.MAX_SAFE_INTEGER
           ) -
           (
-            dateObj(b.date)
-              ?.getTime() ??
+            dateObj(b.date)?.getTime() ??
             Number.MAX_SAFE_INTEGER
           )
       )
-      .slice(
-        0,
-        MAX_SCAN_EVENTS
-      );
+      .slice(0, MAX_SCAN_EVENTS);
 
   const results = [];
 
@@ -2618,10 +1412,7 @@ async function scan(date) {
     i += 5
   ) {
     const batch =
-      selected.slice(
-        i,
-        i + 5
-      );
+      selected.slice(i, i + 5);
 
     results.push(
       ...await Promise.all(
@@ -2648,8 +1439,7 @@ async function scan(date) {
   const allCandidates =
     results.flatMap(
       r =>
-        r.status ===
-        "QUALIFIED"
+        r.status === "QUALIFIED"
           ? r.candidates.map(
               c => ({
                 candidate: c,
@@ -2666,14 +1456,9 @@ async function scan(date) {
           b.candidate.score -
           a.candidate.score
       )
-      .slice(
-        0,
-        ENRICH_LIMIT
-      );
+      .slice(0, ENRICH_LIMIT);
 
-  for (
-    const item of preliminary
-  ) {
+  for (const item of preliminary) {
     const context =
       await enrichEvent(
         item.result.event
@@ -2710,15 +1495,12 @@ async function scan(date) {
     };
 
     item.candidate.score =
-      score(
-        item.candidate
-      );
+      score(item.candidate);
 
     item.candidate.exchange =
       findWom(
         item.result.exchange,
-        item.candidate.key ===
-          "BTTS"
+        item.candidate.key === "BTTS"
           ? "BTTS_YES"
           : item.candidate.key
       );
@@ -2736,34 +1518,28 @@ async function scan(date) {
 
   for (
     const item of
-    enrichedCandidates.sort(
-      (a, b) =>
-        b.candidate.score -
+      enrichedCandidates.sort(
+        (a, b) =>
+          b.candidate.score -
           a.candidate.score ||
-        b.candidate.probability -
+          b.candidate.probability -
           a.candidate.probability ||
-        b.candidate.edge -
+          b.candidate.edge -
           a.candidate.edge
-    )
+      )
   ) {
     const c =
       item.candidate;
 
-    if (!qualify(c))
-      continue;
+    if (!qualify(c)) continue;
 
     const eventId =
       String(
         item.result.event.id
       );
 
-    if (
-      usedEvents.has(
-        eventId
-      )
-    ) {
+    if (usedEvents.has(eventId))
       continue;
-    }
 
     usedEvents.add(eventId);
 
@@ -2781,23 +1557,14 @@ async function scan(date) {
         )
     });
 
-    if (
-      picks.length >=
-      MAX_PICKS
-    ) {
+    if (picks.length >= MAX_PICKS)
       break;
-    }
   }
 
   const reasons = {};
 
-  for (
-    const result of results
-  ) {
-    if (
-      result.status !==
-      "QUALIFIED"
-    ) {
+  for (const result of results) {
+    if (result.status !== "QUALIFIED") {
       reasons[
         result.reason ||
         "NO_QUALIFIED_PICK"
@@ -2828,9 +1595,7 @@ async function scan(date) {
     diagnostics: {
       rejectedEvents:
         results.filter(
-          r =>
-            r.status !==
-            "QUALIFIED"
+          r => r.status !== "QUALIFIED"
         ).length,
       reasons,
       contextAudited:
@@ -2838,18 +1603,15 @@ async function scan(date) {
     },
     exchange: {
       enabled: USE_WOM,
-      status: USE_WOM
-        ? "WOM_ENABLED"
-        : "NOT_CONFIGURED",
+      status:
+        USE_WOM
+          ? "WOM_ENABLED"
+          : "NOT_CONFIGURED",
       message:
         "WOM is a separate BSD feed; when available and liquid enough, it affects scoring."
     }
   };
 }
-
-/* =========================================================
-   32/32 SELF TESTS — NIE RUSZAĆ
-   ========================================================= */
 
 function selfTest() {
   const tests = [];
@@ -2908,19 +1670,15 @@ function selfTest() {
 
   add(
     "event_string_teams",
-    event?.home.name ===
-      "Home FC" &&
-      event?.away.name ===
-        "Away FC"
+    event?.home.name === "Home FC" &&
+    event?.away.name === "Away FC"
   );
 
   add(
     "nested_collection",
     collection({
       data: {
-        results: [
-          { id: 1 }
-        ]
+        results: [{ id: 1 }]
       }
     }).length === 1
   );
@@ -2930,34 +1688,34 @@ function selfTest() {
       event: { id: 7 },
       markets: {
         match_result: {
-          prob_home: 0.55,
-          prob_draw: 0.25,
-          prob_away: 0.20
+          prob_home: .55,
+          prob_draw: .25,
+          prob_away: .20
         },
         over_under: {
-          prob_over_15: 0.72,
-          prob_under_35: 0.78
+          prob_over_15: .72,
+          prob_under_35: .78
         },
         btts: {
-          prob_yes: 0.51,
-          prob_no: 0.49
+          prob_yes: .51,
+          prob_no: .49
         }
       },
       model: {
-        confidence: 0.87
+        confidence: .87
       }
     });
 
   add(
     "prediction_nested",
     prediction?.home === 55 &&
-      prediction?.draw === 25 &&
-      prediction?.away === 20 &&
-      prediction?.over15 === 72 &&
-      prediction?.under35 === 78 &&
-      prediction?.btts === 51 &&
-      prediction?.bttsNo === 49 &&
-      prediction?.confidence === 87
+    prediction?.draw === 25 &&
+    prediction?.away === 20 &&
+    prediction?.over15 === 72 &&
+    prediction?.under35 === 78 &&
+    prediction?.btts === 51 &&
+    prediction?.bttsNo === 49 &&
+    prediction?.confidence === 87
   );
 
   const flatPrediction =
@@ -2978,15 +1736,15 @@ function selfTest() {
   add(
     "prediction_bsd_flat_shape",
     flatPrediction?.home === 62 &&
-      flatPrediction?.draw === 21 &&
-      flatPrediction?.away === 17 &&
-      flatPrediction?.over15 === 84 &&
-      flatPrediction?.over25 === 61 &&
-      flatPrediction?.under25 === 39 &&
-      flatPrediction?.under35 === 79 &&
-      flatPrediction?.btts === 57 &&
-      flatPrediction?.bttsNo === 43 &&
-      flatPrediction?.confidence === 86
+    flatPrediction?.draw === 21 &&
+    flatPrediction?.away === 17 &&
+    flatPrediction?.over15 === 84 &&
+    flatPrediction?.over25 === 61 &&
+    flatPrediction?.under25 === 39 &&
+    flatPrediction?.under35 === 79 &&
+    flatPrediction?.btts === 57 &&
+    flatPrediction?.bttsNo === 43 &&
+    flatPrediction?.confidence === 86
   );
 
   const odds =
@@ -3013,35 +1771,32 @@ function selfTest() {
   add(
     "odds_nested",
     odds.HOME.length === 1 &&
-      odds.DRAW.length === 1 &&
-      odds.AWAY.length === 1 &&
-      odds.OVER15.length === 1 &&
-      odds.OVER25.length === 1 &&
-      odds.UNDER25.length === 1 &&
-      odds.UNDER35.length === 1 &&
-      odds.BTTS_YES.length === 1 &&
-      odds.BTTS_NO.length === 1
+    odds.DRAW.length === 1 &&
+    odds.AWAY.length === 1 &&
+    odds.OVER15.length === 1 &&
+    odds.OVER25.length === 1 &&
+    odds.UNDER25.length === 1 &&
+    odds.UNDER35.length === 1 &&
+    odds.BTTS_YES.length === 1 &&
+    odds.BTTS_NO.length === 1
   );
 
   const rowOdds =
     extractOdds({
       results: [
         {
-          market:
-            "1X2_HOME_FT",
+          market: "1X2_HOME_FT",
           selection: "HOME",
           decimal_odds: 2.1,
           previous_decimal_odds: 2.2
         },
         {
-          market:
-            "OU_2.5_OVER_FT",
+          market: "OU_2.5_OVER_FT",
           selection: "OVER",
           decimal_odds: 2.05
         },
         {
-          market:
-            "BTTS_FT",
+          market: "BTTS_FT",
           selection: "NO",
           decimal_odds: 1.9
         }
@@ -3051,8 +1806,8 @@ function selfTest() {
   add(
     "odds_code_rows",
     rowOdds.HOME.length === 1 &&
-      rowOdds.OVER25.length === 1 &&
-      rowOdds.BTTS_NO.length === 1
+    rowOdds.OVER25.length === 1 &&
+    rowOdds.BTTS_NO.length === 1
   );
 
   add(
@@ -3062,8 +1817,7 @@ function selfTest() {
         odds: 2,
         previousOdds: 2.2
       }
-    ]).movement ===
-      "SHORTENING"
+    ]).movement === "SHORTENING"
   );
 
   add(
@@ -3073,8 +1827,7 @@ function selfTest() {
         odds: 2.2,
         previousOdds: 2
       }
-    ]).movement ===
-      "DRIFTING"
+    ]).movement === "DRIFTING"
   );
 
   add(
@@ -3088,24 +1841,21 @@ function selfTest() {
   add(
     "wom_code_home",
     womKey({
-      market:
-        "1X2_HOME_FT"
+      market: "1X2_HOME_FT"
     }) === "HOME"
   );
 
   add(
     "wom_code_over25",
     womKey({
-      market:
-        "OU_2.5_OVER_FT"
+      market: "OU_2.5_OVER_FT"
     }) === "OVER25"
   );
 
   add(
     "wom_code_btts",
     womKey({
-      market:
-        "BTTS_YES_FT"
+      market: "BTTS_YES_FT"
     }) === "BTTS_YES"
   );
 
@@ -3114,8 +1864,7 @@ function selfTest() {
       id: 7,
       money: [
         {
-          market:
-            "1X2_HOME_FT",
+          market: "1X2_HOME_FT",
           share: 80,
           volume: 10000,
           price: 2,
@@ -3128,16 +1877,14 @@ function selfTest() {
   add(
     "wom_nested_money",
     nestedWom.length === 1 &&
-      nestedWom[0].market ===
-        "1X2_HOME_FT"
+    nestedWom[0].market === "1X2_HOME_FT"
   );
 
   const lowWom = {
     connected: true,
     markets: [
       {
-        market:
-          "1X2_HOME_FT",
+        market: "1X2_HOME_FT",
         volume: 4999,
         share: 80,
         price: 2,
@@ -3153,19 +1900,17 @@ function selfTest() {
       lowWom,
       "HOME"
     ).usable === false &&
-      findWom(
-        lowWom,
-        "HOME"
-      ).status ===
-        "LOW_VOLUME"
+    findWom(
+      lowWom,
+      "HOME"
+    ).status === "LOW_VOLUME"
   );
 
   const goodWom = {
     connected: true,
     markets: [
       {
-        market:
-          "1X2_HOME_FT",
+        market: "1X2_HOME_FT",
         volume: 10000,
         share: 80,
         price: 2,
@@ -3197,7 +1942,7 @@ function selfTest() {
   add(
     "wom_changes_score",
     c?.exchange?.usable === true &&
-      c.score > 50
+    c.score > 50
   );
 
   add(
@@ -3217,8 +1962,7 @@ function selfTest() {
 
   add(
     "lineup_detection",
-    lineups.quality ===
-      "CONFIRMED"
+    lineups.quality === "CONFIRMED"
   );
 
   const form =
@@ -3230,7 +1974,7 @@ function selfTest() {
   add(
     "empty_form_safe",
     form.matches === 0 &&
-      form.points === 0
+    form.points === 0
   );
 
   const m =
@@ -3254,15 +1998,13 @@ function selfTest() {
       probability: 99,
       edge: 20,
       marketMovement: {
-        movement:
-          "SHORTENING"
+        movement: "SHORTENING"
       },
       confidence: 99,
       exchange: {
         usable: true,
         divergence: 30,
-        priceMovement:
-          "SHORTENING"
+        priceMovement: "SHORTENING"
       }
     }) <= 100
   );
@@ -3296,8 +2038,7 @@ function selfTest() {
       {
         id: 1,
         status: "finished",
-        date:
-          "2026-09-25T12:00:00Z",
+        date: "2026-09-25T12:00:00Z",
         home_team: {
           id: 1,
           name: "A"
@@ -3314,8 +2055,7 @@ function selfTest() {
       {
         id: 2,
         status: "finished",
-        date:
-          "2026-09-20T12:00:00Z",
+        date: "2026-09-20T12:00:00Z",
         home_team: {
           id: 3,
           name: "C"
@@ -3341,8 +2081,8 @@ function selfTest() {
   add(
     "form_points_and_goals",
     formCheck.points === 4 &&
-      formCheck.goalDifference === 2 &&
-      formCheck.ppg === 2
+    formCheck.goalDifference === 2 &&
+    formCheck.ppg === 2
   );
 
   const officialOddsShape =
@@ -3370,14 +2110,14 @@ function selfTest() {
   add(
     "official_odds_shape",
     officialOddsShape.HOME[0]?.odds === 2.1 &&
-      officialOddsShape.DRAW[0]?.odds === 3.2 &&
-      officialOddsShape.AWAY[0]?.odds === 3.6 &&
-      officialOddsShape.OVER15[0]?.odds === 1.28 &&
-      officialOddsShape.OVER25[0]?.odds === 2.05 &&
-      officialOddsShape.UNDER25[0]?.odds === 1.78 &&
-      officialOddsShape.UNDER35[0]?.odds === 1.26 &&
-      officialOddsShape.BTTS_YES[0]?.odds === 2.0 &&
-      officialOddsShape.BTTS_NO[0]?.odds === 1.8
+    officialOddsShape.DRAW[0]?.odds === 3.2 &&
+    officialOddsShape.AWAY[0]?.odds === 3.6 &&
+    officialOddsShape.OVER15[0]?.odds === 1.28 &&
+    officialOddsShape.OVER25[0]?.odds === 2.05 &&
+    officialOddsShape.UNDER25[0]?.odds === 1.78 &&
+    officialOddsShape.UNDER35[0]?.odds === 1.26 &&
+    officialOddsShape.BTTS_YES[0]?.odds === 2.0 &&
+    officialOddsShape.BTTS_NO[0]?.odds === 1.8
   );
 
   const bsdEventShape =
@@ -3387,23 +2127,17 @@ function selfTest() {
       home_team: "Home FC",
       away_team_id: 20,
       away_team: "Away FC",
-      event_date:
-        "2026-09-26T18:00:00Z",
+      event_date: "2026-09-26T18:00:00Z",
       status: "notstarted"
     });
 
   add(
     "bsd_event_shape",
-    bsdEventShape?.date ===
-      "2026-09-26T18:00:00Z" &&
-      bsdEventShape?.home?.id ===
-        10 &&
-      bsdEventShape?.home?.name ===
-        "Home FC" &&
-      bsdEventShape?.away?.id ===
-        20 &&
-      bsdEventShape?.away?.name ===
-        "Away FC"
+    bsdEventShape?.date === "2026-09-26T18:00:00Z" &&
+    bsdEventShape?.home?.id === 10 &&
+    bsdEventShape?.home?.name === "Home FC" &&
+    bsdEventShape?.away?.id === 20 &&
+    bsdEventShape?.away?.name === "Away FC"
   );
 
   const womHistoryShape =
@@ -3412,14 +2146,12 @@ function selfTest() {
         {
           money: [
             {
-              market:
-                "1X2_AWAY_FT",
+              market: "1X2_AWAY_FT",
               volume: 12000,
               share: 72,
               price: 1.8,
               previous_price: 1.9,
-              implied_probability:
-                55.56
+              implied_probability: 55.56
             }
           ]
         }
@@ -3429,8 +2161,7 @@ function selfTest() {
   add(
     "wom_results_shape",
     womHistoryShape.length === 1 &&
-      womHistoryShape[0].market ===
-        "1X2_AWAY_FT"
+    womHistoryShape[0].market === "1X2_AWAY_FT"
   );
 
   add(
@@ -3440,8 +2171,7 @@ function selfTest() {
       edge: 5,
       score: 90,
       marketMovement: {
-        movement:
-          "DRIFTING"
+        movement: "DRIFTING"
       }
     }) === false
   );
@@ -3462,21 +2192,14 @@ function selfTest() {
   };
 }
 
-/* =========================================================
-   API
-   ========================================================= */
-
-app.get(
-  "/",
-  (req, res) =>
-    res.json({
-      ok: true,
-      service:
-        "Bet Analyzer Backend",
-      version: VERSION,
-      source: SOURCE,
-      time: nowIso()
-    })
+app.get("/", (req, res) =>
+  res.json({
+    ok: true,
+    service: "Bet Analyzer Backend",
+    version: VERSION,
+    source: SOURCE,
+    time: nowIso()
+  })
 );
 
 app.get(
@@ -3522,28 +2245,25 @@ app.get(
         nowIso().slice(0, 10);
 
       const events =
-        await getEvents(
-          date
-        );
+        await getEvents(date);
 
       res.json({
         ok: true,
         source: SOURCE,
         version: VERSION,
         date,
-        count:
-          events.length,
+        count: events.length,
         events
       });
     } catch (e) {
-      res.status(
-        e.status || 500
-      ).json({
-        ok: false,
-        error:
-          e.code ||
-          e.message
-      });
+      res
+        .status(e.status || 500)
+        .json({
+          ok: false,
+          error:
+            e.code ||
+            e.message
+        });
     }
   }
 );
@@ -3561,206 +2281,24 @@ app.get(
         version: VERSION,
         count: map.size,
         predictions:
-          [
-            ...map.entries()
-          ].map(
-            ([
-              eventId,
-              prediction
-            ]) => ({
-              eventId,
-              prediction
-            })
-          )
+          [...map.entries()]
+            .map(
+              ([eventId, prediction]) =>
+                ({
+                  eventId,
+                  prediction
+                })
+            )
       });
     } catch (e) {
-      res.status(
-        e.status || 500
-      ).json({
-        ok: false,
-        error:
-          e.code ||
-          e.message
-      });
-    }
-  }
-);
-
-/*
- * ==========================================================
- * TEMPORARY DIAGNOSTIC ENDPOINT
- *
- * Nie pokazuje BSD_API_KEY.
- * Służy wyłącznie do ustalenia rzeczywistego kształtu
- * odpowiedzi BSD dotyczącej predykcji.
- * ==========================================================
- */
-
-app.get(
-  "/api/debug-predictions",
-  async (req, res) => {
-    try {
-      const date =
-        req.query.date ||
-        nowIso().slice(0, 10);
-
-      const bulkUpcoming =
-        await safe(
-          "/predictions/?upcoming=true&limit=5"
-        );
-
-      const bulkDate =
-        await safe(
-          `/predictions/?date_from=${encodeURIComponent(
-            date
-          )}&date_to=${encodeURIComponent(
-            date
-          )}&limit=5`
-        );
-
-      const events =
-        (
-          await getEvents(
-            date
-          )
-        ).slice(0, 5);
-
-      const eventChecks =
-        await Promise.all(
-          events.map(
-            async event => {
-              const detail =
-                await safe(
-                  `/events/${encodeURIComponent(
-                    event.id
-                  )}/`
-                );
-
-              const inline =
-                parsePrediction(
-                  detail
-                );
-
-              const dedicated =
-                inline
-                  ? null
-                  : await safe(
-                      `/events/${encodeURIComponent(
-                        event.id
-                      )}/prediction/`
-                    );
-
-              const parsedDedicated =
-                parsePrediction(
-                  dedicated
-                );
-
-              return {
-                eventId:
-                  event.id,
-
-                teams: {
-                  home:
-                    event.home?.name ??
-                    null,
-                  away:
-                    event.away?.name ??
-                    null
-                },
-
-                detailKeys:
-                  detail &&
-                  typeof detail ===
-                    "object"
-                    ? Object.keys(
-                        detail
-                      )
-                    : [],
-
-                inlinePredictionParsed:
-                  Boolean(
-                    inline
-                  ),
-
-                inlinePrediction:
-                  inline,
-
-                dedicatedPredictionParsed:
-                  Boolean(
-                    parsedDedicated
-                  ),
-
-                dedicatedPrediction:
-                  parsedDedicated,
-
-                dedicatedKeys:
-                  dedicated &&
-                  typeof dedicated ===
-                    "object"
-                    ? Object.keys(
-                        dedicated
-                      )
-                    : []
-              };
-            }
-          )
-        );
-
-      const summarize =
-        data => ({
-          type:
-            Array.isArray(data)
-              ? "array"
-              : typeof data,
-
-          keys:
-            data &&
-            typeof data ===
-              "object" &&
-            !Array.isArray(data)
-              ? Object.keys(
-                  data
-                )
-              : [],
-
-          collectionCount:
-            collection(data)
-              .length,
-
-          firstRow:
-            collection(data)[0] ??
-            null
+      res
+        .status(e.status || 500)
+        .json({
+          ok: false,
+          error:
+            e.code ||
+            e.message
         });
-
-      res.json({
-        ok: true,
-        source: SOURCE,
-        version: VERSION,
-        date,
-
-        bulkUpcoming:
-          summarize(
-            bulkUpcoming
-          ),
-
-        bulkDate:
-          summarize(
-            bulkDate
-          ),
-
-        eventChecks
-      });
-    } catch (e) {
-      res.status(
-        e.status || 500
-      ).json({
-        ok: false,
-        source: SOURCE,
-        version: VERSION,
-        error:
-          e.code ||
-          e.message
-      });
     }
   }
 );
@@ -3772,20 +2310,20 @@ app.get(
       res.json(
         await scan(
           req.query.date ||
-            nowIso().slice(0, 10)
+          nowIso().slice(0, 10)
         )
       );
     } catch (e) {
-      res.status(
-        e.status || 500
-      ).json({
-        ok: false,
-        source: SOURCE,
-        version: VERSION,
-        error:
-          e.code ||
-          e.message
-      });
+      res
+        .status(e.status || 500)
+        .json({
+          ok: false,
+          source: SOURCE,
+          version: VERSION,
+          error:
+            e.code ||
+            e.message
+        });
     }
   }
 );
@@ -3795,9 +2333,7 @@ app.get(
   async (req, res) => {
     try {
       const id =
-        num(
-          req.params.id
-        );
+        num(req.params.id);
 
       if (id === null) {
         return res
@@ -3811,15 +2347,11 @@ app.get(
 
       const raw =
         await safe(
-          `/events/${encodeURIComponent(
-            id
-          )}/`
+          `/events/${encodeURIComponent(id)}/`
         );
 
       const event =
-        normalizeEvent(
-          raw
-        );
+        normalizeEvent(raw);
 
       if (!event) {
         return res
@@ -3844,14 +2376,14 @@ app.get(
         ))
       });
     } catch (e) {
-      res.status(
-        e.status || 500
-      ).json({
-        ok: false,
-        error:
-          e.code ||
-          e.message
-      });
+      res
+        .status(e.status || 500)
+        .json({
+          ok: false,
+          error:
+            e.code ||
+            e.message
+        });
     }
   }
 );
@@ -3860,9 +2392,7 @@ app.get(
   "/api/events/:id/odds",
   async (req, res) => {
     const id =
-      num(
-        req.params.id
-      );
+      num(req.params.id);
 
     if (id === null) {
       return res
@@ -3876,9 +2406,7 @@ app.get(
 
     const data =
       await safe(
-        `/events/${encodeURIComponent(
-          id
-        )}/odds/`
+        `/events/${encodeURIComponent(id)}/odds/`
       );
 
     if (!data) {
@@ -3916,12 +2444,7 @@ app.use(
 );
 
 app.use(
-  (
-    err,
-    req,
-    res,
-    next
-  ) => {
+  (err, req, res, next) => {
     console.error(err);
 
     res
@@ -3937,8 +2460,7 @@ app.use(
 );
 
 if (
-  process.env.TEST_MODE !==
-  "true"
+  process.env.TEST_MODE !== "true"
 ) {
   app.listen(
     PORT,
