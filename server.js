@@ -655,6 +655,32 @@ async function scan(date) {
   // Only candidates that survived the full contextual audit can become final picks.
   // This prevents a raw model/odds candidate from bypassing lineup/form/H2H checks.
   const enrichedCandidates = preliminary;
+  const candidateAudit = enrichedCandidates
+    .slice()
+    .sort((a, b) => b.candidate.score - a.candidate.score || b.candidate.probability - a.candidate.probability || b.candidate.edge - a.candidate.edge)
+    .map(item => {
+      const c = item.candidate;
+      const reasons = [];
+      if (c.probability < MIN_PROBABILITY) reasons.push("LOW_PROBABILITY");
+      if (c.edge < MIN_EDGE) reasons.push("LOW_EDGE");
+      if (c.score < MIN_SCORE) reasons.push("LOW_SCORE");
+      if (c.marketMovement?.movement === "DRIFTING") reasons.push("DRIFTING");
+      return {
+        eventId: item.result.event.id,
+        event: item.result.event.event,
+        key: c.key,
+        probability: c.probability,
+        odds: c.odds,
+        edge: c.edge,
+        score: c.score,
+        movement: c.marketMovement?.movement ?? "UNKNOWN",
+        movementChangePercent: c.marketMovement?.changePercent ?? null,
+        exchangeUsable: Boolean(c.exchange?.usable),
+        exchangeStatus: c.exchange?.status ?? null,
+        exchangeDivergence: c.exchange?.divergence ?? null,
+        reasons
+      };
+    });
   const picks = [];
   const usedEvents = new Set();
   for (const item of enrichedCandidates.sort((a, b) => b.candidate.score - a.candidate.score || b.candidate.probability - a.candidate.probability || b.candidate.edge - a.candidate.edge)) {
@@ -671,7 +697,12 @@ async function scan(date) {
   return {
     source: SOURCE, version: VERSION, date, generatedAt: nowIso(), scannedEvents: selected.length, analyzedEvents: results.length,
     predictionRecords: predictionMap.size, qualifiedEvents: picks.length, picks,
-    diagnostics: { rejectedEvents: results.filter(r => r.status !== "QUALIFIED").length, reasons, contextAudited: preliminary.length },
+    diagnostics: {
+      rejectedEvents: results.filter(r => r.status !== "QUALIFIED").length,
+      reasons,
+      contextAudited: preliminary.length,
+      candidateAudit
+    },
     exchange: { enabled: USE_WOM, status: USE_WOM ? "WOM_ENABLED" : "NOT_CONFIGURED", message: "WOM is a separate BSD feed; when available and liquid enough, it affects scoring." }
   };
 }
