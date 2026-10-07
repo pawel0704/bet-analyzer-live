@@ -610,8 +610,12 @@ async function analyzeEvent(event, predictionMap) {
   if (!Object.values(markets).some(rows => rows.length)) return { event, status: "REJECT", reason: "NO_RECOGNIZED_ODDS", prediction };
   const exchange = await getWom(event.id);
   const initial = candidates(prediction, markets, exchange);
-  const qualifiedBeforeContext = initial.filter(qualify);
-  return { event, status: qualifiedBeforeContext.length ? "QUALIFIED" : "REJECT", reason: qualifiedBeforeContext.length ? null : "NO_QUALIFIED_PICK", prediction, candidates: initial, qualified: qualifiedBeforeContext, exchange, markets };
+  if (!initial.length) {
+    return { event, status: "REJECT", reason: "NO_CANDIDATES", prediction, candidates: [], qualified: [], exchange, markets };
+  }
+  // Do not qualify before contextual enrichment. Form, H2H, stats and lineups
+  // must be allowed to improve or downgrade every model+odds candidate.
+  return { event, status: "ANALYZED", reason: null, prediction, candidates: initial, qualified: [], exchange, markets };
 }
 
 async function scan(date) {
@@ -623,7 +627,9 @@ async function scan(date) {
     results.push(...await Promise.all(batch.map(e => analyzeEvent(e, predictionMap).catch(error => ({ event: e, status: "ERROR", reason: error.code || error.message || "ANALYZE_ERROR" })))));
   }
 
-  const allCandidates = results.flatMap(r => r.status === "QUALIFIED" ? r.candidates.map(c => ({ candidate: c, result: r })) : []);
+  // Enrich the best raw candidates first. Qualification happens only after
+  // contextual enrichment, so candidates are not discarded prematurely.
+  const allCandidates = results.flatMap(r => arr(r.candidates).map(c => ({ candidate: c, result: r })));
   const preliminary = allCandidates
     .sort((a, b) => b.candidate.score - a.candidate.score)
     .slice(0, ENRICH_LIMIT);
