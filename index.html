@@ -13,7 +13,7 @@
 <body>
 <header>
   <div><h1>BET ANALYZER 2.0</h1><p>LIVE MARKET SCANNER</p></div>
-  <button id="mode" class="mode">DEMO</button>
+  <button id="mode" class="mode">LIVE</button>
 </header>
 <main>
   <nav class="toolbar">
@@ -26,20 +26,19 @@
   <section id="scanner" class="panel">
     <div class="statusline"><span id="statusDot" class="dot"></span><span id="statusText">DEMO — dane przykładowe</span></div>
     <div class="controls">
-      <label>Min. prawdopodobieństwo <input id="minProb" type="number" value="60" min="0" max="99" step="1"><small>%</small></label>
-      <label>Min. edge <input id="minEdge" type="number" value="3" min="0" step="0.5"><small>%</small></label>
-      <label>Min. płynność <input id="minLiq" type="number" value="500" min="0"><small>j.</small></label>
+      <label>Min. prawdopodobieństwo <input id="minProb" type="number" value="70" min="0" max="99" step="1"><small>%</small></label>
       <label>Limit wyników <input id="limit" type="number" value="10" min="1" max="20"></label>
       <label>Rynek
         <select id="marketType">
-          <option value="MATCH_ODDS">1X2 / Match Odds</option>
+          <option value="ALL">Wszystkie</option>
+          <option value="MATCH_ODDS">1X2 / Double Chance</option>
           <option value="OVER_UNDER_25">Over/Under 2.5</option>
           <option value="BOTH_TEAMS_TO_SCORE">BTTS</option>
         </select>
       </label>
       <button id="scan" class="primary">Skanuj</button>
     </div>
-    <p class="note">W LIVE wynik jest rankingiem sygnałów rynkowych. „Model est.” nie jest gwarancją wyniku ani certyfikowanym prawdopodobieństwem.</p>
+    <p class="note">LIVE pokazuje ranking rzeczywiście dostępnych danych BSD. Filtr prawdopodobieństwa działa lokalnie na wynikach skanu. Ujemny edge jest informacyjny i nie usuwa automatycznie mocnego picku.</p>
     <div id="cards"></div>
   </section>
 
