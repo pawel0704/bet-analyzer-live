@@ -119,13 +119,25 @@ function normalizeEvent(raw) {
   if (raw.away_team && typeof raw.away_team === "string") away.name = raw.away_team;
   const id = num(raw.id ?? raw.event_id ?? raw.eventId ?? fixture.id ?? fixture.event_id ?? fixture.eventId);
   if (id === null) return null;
+  const leagueValue = firstObject(raw.league, raw.competition, raw.tournament, fixture.league, fixture.competition, fixture.tournament);
+  const league = leagueValue?.name
+    ?? raw.leagueName ?? raw.league_name
+    ?? raw.competitionName ?? raw.competition_name
+    ?? raw.tournamentName ?? raw.tournament_name
+    ?? fixture.leagueName ?? fixture.league_name
+    ?? fixture.competitionName ?? fixture.competition_name
+    ?? fixture.tournamentName ?? fixture.tournament_name
+    ?? (typeof raw.league === "string" ? raw.league : null)
+    ?? (typeof raw.competition === "string" ? raw.competition : null)
+    ?? (typeof raw.tournament === "string" ? raw.tournament : null)
+    ?? null;
   return {
     id,
     event: raw.name ?? fixture.name ?? `${home.name} – ${away.name}`,
     date: raw.event_date ?? raw.date ?? raw.startTime ?? raw.start_time ?? raw.utcDate ?? raw.kickoff ?? fixture.event_date ?? fixture.date ?? fixture.startTime ?? fixture.start_time ?? fixture.utcDate ?? fixture.kickoff ?? null,
     status: status(raw),
-    league: raw.league?.name ?? raw.competition?.name ?? raw.leagueName ?? (typeof raw.league === "string" ? raw.league : null),
-    leagueId: num(raw.league?.id ?? raw.leagueId),
+    league,
+    leagueId: num(raw.league?.id ?? raw.competition?.id ?? raw.tournament?.id ?? raw.leagueId ?? raw.competitionId ?? raw.tournamentId),
     seasonId: num(raw.season?.id ?? raw.seasonId),
     home, away,
     referee: firstObject(raw.referee, raw.official, fixture.referee),
