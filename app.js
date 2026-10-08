@@ -44,6 +44,41 @@ function eventName(value) {
   return "Nieznany mecz";
 }
 
+function applyFilters(picks) {
+  const minProb = Number($("minProb")?.value || 0);
+  const limit = Math.max(1, Number($("limit")?.value || 10));
+  const market = $("marketType")?.value || "ALL";
+  const matches = p => {
+    if (market === "ALL") return true;
+    const k = String(p.key || "").toUpperCase();
+    if (market === "MATCH_ODDS") return ["HOME","DRAW","AWAY","DC1X","DCX2"].includes(k);
+    if (market === "OVER_UNDER_25") return ["OVER15","OVER25","UNDER25","UNDER35"].includes(k);
+    if (market === "BOTH_TEAMS_TO_SCORE") return ["BTTS_YES","BTTS_NO"].includes(k);
+    return true;
+  };
+  return picks.filter(p => Number(p.probability) >= minProb && matches(p)).slice(0, limit);
+}
+
+function renderExchange(data) {
+  const box = $("exchangeBox");
+  if (!box) return;
+  const picks = data?.picks || [];
+  box.innerHTML = picks.length ? picks.map((p, i) => {
+    const ex = p.exchange || {};
+    const mv = p.marketMovement || {};
+    return '<article class="card"><strong>#' + (i + 1) + ' ' + escapeHtml(eventName(p.event)) + '</strong>' +
+      '<p>' + escapeHtml(p.label || p.key) + ' · kurs ' + escapeHtml(p.odds) + '</p>' +
+      '<p>Ruch: <strong>' + escapeHtml(mv.movement || "UNKNOWN") + '</strong></p>' +
+      '<p>WOM: <strong>' + escapeHtml(ex.status || "BRAK") + '</strong></p></article>';
+  }).join("") : '<div class="note">Brak danych giełdowych do pokazania.</div>';
+}
+
+function scheduleRefresh() {
+  const seconds = Math.max(5, Number($("refresh")?.value || 15));
+  clearInterval(window.betAnalyzerRefresh);
+  window.betAnalyzerRefresh = setInterval(() => { if (!document.hidden) scan(); }, seconds * 1000);
+}
+
 function renderCards(picks) {
   const box = $("cards");
   if (!box) return;
@@ -85,7 +120,9 @@ async function scan() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (!data || data.source !== "BSD") throw new Error("Backend zwrócił nieoczekiwany format danych.");
-    renderCards(data.picks || []);
+    localStorage.setItem("betAnalyzerLastScan", JSON.stringify(data));
+    renderCards(applyFilters(data.picks || []));
+    renderExchange(data);
     saveHistory(data);
     setStatus(`LIVE · ${data.qualifiedEvents ?? data.picks?.length ?? 0} kwalifikujących picków · ${date}`, true);
     renderHistory();
@@ -147,6 +184,15 @@ function setup() {
     location.reload();
   });
   if ($("test")) $("test").addEventListener("click", testConnection);
+  ["minProb", "limit", "marketType"].forEach(id => {
+    if ($(id)) $(id).addEventListener("change", () => {
+      const last = JSON.parse(localStorage.getItem("betAnalyzerLastScan") || "null");
+      if (last) renderCards(applyFilters(last.picks || []));
+    });
+  });
+  if ($("refresh")) $("refresh").addEventListener("change", scheduleRefresh);
+  if ($("mode")) $("mode").textContent = "LIVE";
+  scheduleRefresh();
   renderHistory();
 }
 
