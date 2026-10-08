@@ -439,9 +439,16 @@ function score(candidate) {
   return Math.round(clamp(value, 0, 100));
 }
 
-function candidates(prediction, markets, wom = null) {
+function candidates(prediction, markets, wom = null, marketType = "ALL") {
   const defs = [["DC1X","1X"],["DCX2","X2"],["OVER15","Over 1.5"],["UNDER35","Under 3.5"],["BTTS","BTTS"],["BTTS_NO","BTTS No"],["OVER25","Over 2.5"],["UNDER25","Under 2.5"],["HOME","Home"],["AWAY","Away"],["DRAW","Draw"]];
-  return defs.flatMap(([key, label]) => {
+  const allowed = marketType === "MATCH_ODDS"
+    ? new Set(["HOME","DRAW","AWAY","DC1X","DCX2"])
+    : marketType === "OVER_UNDER_25"
+      ? new Set(["OVER25","UNDER25"])
+      : marketType === "BOTH_TEAMS_TO_SCORE"
+        ? new Set(["BTTS","BTTS_NO"])
+        : null;
+  return defs.filter(([key]) => !allowed || allowed.has(key)).flatMap(([key, label]) => {
     const probability = marketProb(prediction, key);
     const quote = bestQuote(markets[key === "BTTS" ? "BTTS_YES" : key]);
     if (probability === null || !quote) return [];
@@ -650,7 +657,7 @@ async function analyzeEvent(event, predictionMap) {
   const markets = mergeOdds(extractOdds(oddsRaw), extractOdds(oddsFeedRaw));
   if (!Object.values(markets).some(rows => rows.length)) return { event, status: "REJECT", reason: "NO_RECOGNIZED_ODDS", prediction };
   const exchange = await getWom(event.id);
-  const initial = candidates(prediction, markets, exchange);
+  const initial = candidates(prediction, markets, exchange, marketType);
   if (!initial.length) {
     return { event, status: "REJECT", reason: "NO_CANDIDATES", prediction, candidates: [], qualified: [], exchange, markets };
   }
@@ -659,7 +666,7 @@ async function analyzeEvent(event, predictionMap) {
   return { event, status: "ANALYZED", reason: null, prediction, candidates: initial, qualified: [], exchange, markets };
 }
 
-async function scan(date) {
+async function scan(date, marketType = "ALL") {
   const [events, predictionMap] = await Promise.all([getEvents(date), getPredictionMap(date)]);
   const selected = events.sort((a, b) => (dateObj(a.date)?.getTime() ?? Number.MAX_SAFE_INTEGER) - (dateObj(b.date)?.getTime() ?? Number.MAX_SAFE_INTEGER)).slice(0, MAX_SCAN_EVENTS);
   const results = [];
@@ -907,7 +914,7 @@ app.get("/api/debug-wom", async (req, res) => {
 });
 app.get("/api/events", async (req, res) => { try { const date = req.query.date || nowIso().slice(0, 10); const events = await getEvents(date); res.json({ ok: true, source: SOURCE, version: VERSION, date, count: events.length, events }); } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.code || e.message }); } });
 app.get("/api/predictions", async (req, res) => { try { const map = await getPredictionMap(); res.json({ ok: true, source: SOURCE, version: VERSION, count: map.size, predictions: [...map.entries()].map(([eventId, prediction]) => ({ eventId, prediction })) }); } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.code || e.message }); } });
-app.get(["/api/scan", "/api/top-picks"], async (req, res) => { try { res.json(await scan(req.query.date || nowIso().slice(0, 10))); } catch (e) { res.status(e.status || 500).json({ ok: false, source: SOURCE, version: VERSION, error: e.code || e.message }); } });
+app.get(["/api/scan", "/api/top-picks"], async (req, res) => { try { res.json(await scan(req.query.date || nowIso().slice(0, 10), String(req.query.market || "ALL").toUpperCase())); } catch (e) { res.status(e.status || 500).json({ ok: false, source: SOURCE, version: VERSION, error: e.code || e.message }); } });
 app.get("/api/analyze/:id", async (req, res) => { try { const id = num(req.params.id); if (id === null) return res.status(400).json({ ok: false, error: "INVALID_EVENT_ID" }); const raw = await safe(`/events/${encodeURIComponent(id)}/`); const event = normalizeEvent(raw); if (!event) return res.status(404).json({ ok: false, error: "EVENT_NOT_FOUND" }); const map = await getPredictionMap(); res.json({ ok: true, source: SOURCE, version: VERSION, ...(await analyzeEvent(event, map)) }); } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.code || e.message }); } });
 app.get("/api/events/:id/odds", async (req, res) => { const id = num(req.params.id); if (id === null) return res.status(400).json({ ok: false, error: "INVALID_EVENT_ID" }); const data = await safe(`/events/${encodeURIComponent(id)}/odds/`); if (!data) return res.status(404).json({ ok: false, error: "ODDS_NOT_FOUND" }); res.json({ ok: true, source: SOURCE, version: VERSION, eventId: id, data, parsed: extractOdds(data) }); });
 app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND", path: req.path, version: VERSION }));
