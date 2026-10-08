@@ -104,7 +104,8 @@ function normalizeTeam(value, fallback = "") {
 
 function normalizeEvent(raw) {
   if (!raw || typeof raw !== "object") return null;
-  const fixture = firstObject(raw.fixture, raw.event, raw.match) || raw;
+  const source = firstObject(raw.data, raw.result) || raw;
+  const fixture = firstObject(source.fixture, source.event, source.match, raw.fixture, raw.event, raw.match) || source;
   const homeValue = raw.home_team && typeof raw.home_team === "object"
     ? raw.home_team
     : firstObject(raw.homeTeam, raw.teams?.home, raw.home, fixture.home_team, fixture.homeTeam, fixture.teams?.home, fixture.home);
