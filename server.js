@@ -698,7 +698,7 @@ async function scan(date) {
   const enrichedCandidates = preliminary;
   const candidateAudit = enrichedCandidates
     .slice()
-    .sort((a, b) => b.candidate.score - a.candidate.score || b.candidate.probability - a.candidate.probability || b.candidate.edge - a.candidate.edge)
+    .sort((a, b) => b.candidate.probability - a.candidate.probability || b.candidate.score - a.candidate.score || b.candidate.edge - a.candidate.edge)
     .map(item => {
       const c = item.candidate;
       const reasons = [];
@@ -725,7 +725,7 @@ async function scan(date) {
     });
   const picks = [];
   const usedEvents = new Set();
-  for (const item of enrichedCandidates.sort((a, b) => b.candidate.score - a.candidate.score || b.candidate.probability - a.candidate.probability || b.candidate.edge - a.candidate.edge)) {
+  for (const item of enrichedCandidates.sort((a, b) => b.candidate.probability - a.candidate.probability || b.candidate.score - a.candidate.score || b.candidate.edge - a.candidate.edge)) {
     const c = item.candidate;
     if (!qualify(c)) continue;
     const eventId = String(item.result.event.id);
