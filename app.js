@@ -33,6 +33,16 @@ function saveHistory(data) {
   localStorage.setItem("betAnalyzerHistory", JSON.stringify(history.slice(0, 20)));
 }
 
+function eventName(value) {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") {
+    if (value.home?.name && value.away?.name) return value.home.name + " – " + value.away.name;
+    if (value.home_team && value.away_team) return value.home_team + " – " + value.away_team;
+    if (value.name) return value.name;
+  }
+  return "Nieznany mecz";
+}
+
 function renderCards(picks) {
   const box = $("cards");
   if (!box) return;
@@ -48,7 +58,7 @@ function renderCards(picks) {
     return `
       <article class="card">
         <div style="display:flex;justify-content:space-between;gap:10px">
-          <h3>#${i + 1} ${escapeHtml(p.event)}</h3>
+          <h3>#${i + 1} ${escapeHtml(eventName(p.event))}</h3>
           <strong>${Number(p.probability).toFixed(1)}%</strong>
         </div>
         <p><strong>${escapeHtml(p.label || p.key)}</strong> · kurs ${escapeHtml(p.odds)}</p>
