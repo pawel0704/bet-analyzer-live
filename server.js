@@ -636,8 +636,10 @@ function mergeOdds(a, b) {
 }
 
 function qualify(candidate) {
+  const strongProbability = candidate.probability >= 70;
+  const requiredScore = strongProbability ? Math.min(MIN_SCORE, 62) : MIN_SCORE;
   return candidate.probability >= MIN_PROBABILITY &&
-    candidate.score >= MIN_SCORE &&
+    candidate.score >= requiredScore &&
     candidate.marketMovement.movement !== "DRIFTING";
 }
 
@@ -702,7 +704,8 @@ async function scan(date) {
       const reasons = [];
       if (c.probability < MIN_PROBABILITY) reasons.push("LOW_PROBABILITY");
       if (c.edge < MIN_EDGE) reasons.push("LOW_EDGE");
-      if (c.score < MIN_SCORE) reasons.push("LOW_SCORE");
+      const requiredScore = c.probability >= 70 ? Math.min(MIN_SCORE, 62) : MIN_SCORE;
+      if (c.score < requiredScore) reasons.push("LOW_SCORE");
       if (c.marketMovement?.movement === "DRIFTING") reasons.push("DRIFTING");
       return {
         eventId: item.result.event.id,
