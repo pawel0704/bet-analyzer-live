@@ -650,7 +650,7 @@ function qualify(candidate) {
     candidate.marketMovement.movement !== "DRIFTING";
 }
 
-async function analyzeEvent(event, predictionMap) {
+async function analyzeEvent(event, predictionMap, marketType = "ALL") {
   const prediction = predictionMap.get(event.id) || null;
   if (!prediction) return { event, status: "REJECT", reason: "NO_PREDICTION" };
   const [oddsRaw, oddsFeedRaw] = await Promise.all([safe(`/events/${event.id}/odds/`), safe(`/events/${event.id}/?sport=football`, { odds: true })]);
