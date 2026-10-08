@@ -566,21 +566,31 @@ function normalizeWomData(data) {
 
 async function getWom(eventId) {
   if (!USE_WOM) return { connected: false, status: "NOT_CONFIGURED", signalUsed: false, markets: [] };
-  const data = await safe(`/events/${encodeURIComponent(eventId)}/`, { wom: true });
-  if (!data) return { connected: false, status: "UNAVAILABLE", signalUsed: false, markets: [] };
-  const money = normalizeWomData(data).filter(x => num(x.share) !== null && num(x.price) > 1 && x.market);
-  return {
-    connected: true, status: "CONNECTED", signalUsed: false, eventId,
-    totalVolume: num(data.total_volume),
-    markets: money.map(x => ({
-      market: x.market, kind: x.kind ?? null, line: x.line ?? null, selection: x.selection ?? null,
-      volume: num(x.volume), share: num(x.share), marketVolume: num(x.market_volume), leagueAvgVolume: num(x.league_avg_volume),
-      price: num(x.price), previousPrice: num(x.previous_price),
-      impliedProbability: num(x.implied_probability) ?? implied(x.price),
-      divergence: num(x.divergence) ?? (num(x.share) !== null && implied(x.price) !== null ? num(x.share) - implied(x.price) : null),
-      capturedAt: x.captured_at ?? null
-    }))
-  };
+  try {
+    // BSD documents this exact event route for Weight of Money.
+    const data = await bsd(`/events/${encodeURIComponent(eventId)}/`, { wom: true });
+    const money = normalizeWomData(data).filter(x => num(x.share) !== null && num(x.price) > 1 && x.market);
+    return {
+      connected: true, status: money.length ? "CONNECTED" : "NO_MARKETS", signalUsed: false, eventId,
+      totalVolume: num(data?.total_volume),
+      markets: money.map(x => ({
+        market: x.market, kind: x.kind ?? null, line: x.line ?? null, selection: x.selection ?? null,
+        volume: num(x.volume), share: num(x.share), marketVolume: num(x.market_volume), leagueAvgVolume: num(x.league_avg_volume),
+        price: num(x.price), previousPrice: num(x.previous_price),
+        impliedProbability: num(x.implied_probability) ?? implied(x.price),
+        divergence: num(x.divergence) ?? (num(x.share) !== null && implied(x.price) !== null ? num(x.share) - implied(x.price) : null),
+        capturedAt: x.captured_at ?? null
+      }))
+    };
+  } catch (e) {
+    const status = e?.status === 401 ? "AUTH_REQUIRED"
+      : e?.status === 402 ? "SUBSCRIPTION_REQUIRED"
+      : e?.status === 404 ? "EVENT_NOT_COVERED"
+      : e?.code === "BSD_TIMEOUT" ? "TIMEOUT"
+      : "UNAVAILABLE";
+    console.error(`[WOM] event ${eventId}`, e.code || e.message);
+    return { connected: false, status, httpStatus: e?.status ?? null, code: e?.code ?? null, signalUsed: false, markets: [] };
+  }
 }
 
 async function getEvents(date) {
@@ -849,6 +859,20 @@ app.get("/api/debug-predictions", async (req, res) => {
 });
 
 app.get("/api/self-test", (req, res) => { const result = selfTest(); res.status(result.ok ? 200 : 500).json(result); });
+app.get("/api/debug-wom", async (req, res) => {
+  const eventId = num(req.query.eventId);
+  if (eventId === null) return res.status(400).json({ ok: false, error: "INVALID_EVENT_ID" });
+  if (!USE_WOM) return res.json({ ok: true, enabled: false, status: "NOT_CONFIGURED" });
+  const result = await getWom(eventId);
+  let coverage = null;
+  try {
+    const data = await bsd("/coverage/", { wom: true });
+    coverage = { ok: true, data };
+  } catch (e) {
+    coverage = { ok: false, status: e?.status ?? null, code: e?.code ?? null, error: e?.message ?? null };
+  }
+  res.json({ ok: true, version: VERSION, source: SOURCE, eventId, womBase: WOM_BASE_URL, result, coverage });
+});
 app.get("/api/events", async (req, res) => { try { const date = req.query.date || nowIso().slice(0, 10); const events = await getEvents(date); res.json({ ok: true, source: SOURCE, version: VERSION, date, count: events.length, events }); } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.code || e.message }); } });
 app.get("/api/predictions", async (req, res) => { try { const map = await getPredictionMap(); res.json({ ok: true, source: SOURCE, version: VERSION, count: map.size, predictions: [...map.entries()].map(([eventId, prediction]) => ({ eventId, prediction })) }); } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.code || e.message }); } });
 app.get(["/api/scan", "/api/top-picks"], async (req, res) => { try { res.json(await scan(req.query.date || nowIso().slice(0, 10))); } catch (e) { res.status(e.status || 500).json({ ok: false, source: SOURCE, version: VERSION, error: e.code || e.message }); } });
