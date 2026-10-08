@@ -471,15 +471,23 @@ function summarizeUnavailable(detail) {
 }
 
 function summarizeForm(data, teamId) {
-  const rows = collection(data).filter(x => status(x) === "finished").sort((a,b) => (dateObj(b.event_date ?? b.date ?? b.kickoff ?? b.startTime)?.getTime() ?? 0) - (dateObj(a.event_date ?? a.date ?? a.kickoff ?? a.startTime)?.getTime() ?? 0)).slice(0, 5);
+  const rows = collection(data)
+    .filter(x => {
+      const s = String(x?.status ?? x?.fixture?.status ?? x?.state ?? x?.fixture_status ?? "").toLowerCase();
+      return status(x) === "finished" || ["ft", "fulltime", "full_time", "complete", "completed", "ended"].includes(s);
+    })
+    .sort((a,b) => (dateObj(b.event_date ?? b.match_date ?? b.date ?? b.kickoff ?? b.startTime ?? b.fixture?.date)?.getTime() ?? 0) -
+      (dateObj(a.event_date ?? a.match_date ?? a.date ?? a.kickoff ?? a.startTime ?? a.fixture?.date)?.getTime() ?? 0))
+    .slice(0, 5);
   const form = []; let points = 0; let goalDifference = 0; let goalsFor = 0; let goalsAgainst = 0;
   for (const row of rows) {
-    const event = normalizeEvent(row); if (!event) continue;
-    const homeScore = num(row.home_score ?? row.score?.home ?? row.home?.score ?? row.scores?.home ?? row.result?.home);
-    const awayScore = num(row.away_score ?? row.score?.away ?? row.away?.score ?? row.scores?.away ?? row.result?.away);
+    const event = normalizeEvent(row);
+    if (!event) continue;
+    const homeScore = num(row.home_score ?? row.home_score_ft ?? row.home_score_fulltime ?? row.score?.home ?? row.home?.score ?? row.scores?.home ?? row.result?.home ?? row.result?.home_score);
+    const awayScore = num(row.away_score ?? row.away_score_ft ?? row.away_score_fulltime ?? row.score?.away ?? row.away?.score ?? row.scores?.away ?? row.result?.away ?? row.result?.away_score);
     if (homeScore === null || awayScore === null) continue;
-    const isHome = event.home.id === teamId;
-    const isAway = event.away.id === teamId;
+    const isHome = num(row.home_team_id ?? row.homeTeamId ?? row.home?.id ?? event.home.id) === teamId || event.home.id === teamId;
+    const isAway = num(row.away_team_id ?? row.awayTeamId ?? row.away?.id ?? event.away.id) === teamId || event.away.id === teamId;
     if (!isHome && !isAway) continue;
     const gf = isHome ? homeScore : awayScore, ga = isHome ? awayScore : homeScore;
     const result = gf > ga ? "W" : gf < ga ? "L" : "D";
@@ -490,12 +498,18 @@ function summarizeForm(data, teamId) {
 }
 
 async function getTeamForm(teamId) {
-  if (teamId === null) return { matches: 0, form: [], points: 0, goalDifference: 0 };
-  const data = await safe(`/teams/${encodeURIComponent(teamId)}/fixtures/?status=finished&limit=10`);
-  const primary = summarizeForm(data, teamId);
-  if (primary.matches > 0) return primary;
-  const fallback = await safe(`/teams/${encodeURIComponent(teamId)}/fixtures/?limit=30`);
-  return summarizeForm(fallback, teamId);
+  if (teamId === null) return { matches: 0, form: [], points: 0, goalDifference: 0, goalsFor: 0, goalsAgainst: 0, ppg: 0 };
+  const endpoints = [
+    `/teams/${encodeURIComponent(teamId)}/fixtures/?status=finished&limit=30`,
+    `/teams/${encodeURIComponent(teamId)}/fixtures/?limit=30`,
+    `/events/?team_id=${encodeURIComponent(teamId)}&status=finished&limit=30`
+  ];
+  for (const path of endpoints) {
+    const data = await safe(path);
+    const form = summarizeForm(data, teamId);
+    if (form.matches > 0) return form;
+  }
+  return { matches: 0, form: [], points: 0, goalDifference: 0, goalsFor: 0, goalsAgainst: 0, ppg: 0 };
 }
 
 function numericStat(data, keys) {
