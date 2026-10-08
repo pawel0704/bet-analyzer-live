@@ -38,6 +38,7 @@ function eventName(value) {
   if (value && typeof value === "object") {
     if (value.home?.name && value.away?.name) return value.home.name + " – " + value.away.name;
     if (value.home_team && value.away_team) return value.home_team + " – " + value.away_team;
+    if (value.event && typeof value.event === "string") return value.event;
     if (value.name) return value.name;
   }
   return "Nieznany mecz";
