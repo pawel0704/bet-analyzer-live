@@ -52,7 +52,7 @@ function applyFilters(picks) {
     if (market === "ALL") return true;
     const k = String(p.key || "").toUpperCase();
     if (market === "MATCH_ODDS") return ["HOME","DRAW","AWAY","DC1X","DCX2"].includes(k);
-    if (market === "OVER_UNDER_25") return ["OVER15","OVER25","UNDER25","UNDER35"].includes(k);
+    if (market === "OVER_UNDER_25") return ["OVER25","UNDER25"].includes(k);
     if (market === "BOTH_TEAMS_TO_SCORE") return ["BTTS_YES","BTTS_NO"].includes(k);
     return true;
   };
@@ -116,7 +116,8 @@ async function scan() {
   setStatus("Łączenie z backendem…", true);
   try {
     const date = todayWarsaw();
-    const response = await fetch(`${API_URL}/api/scan?date=${date}`, { cache: "no-store" });
+    const market = $("marketType")?.value || "ALL";
+    const response = await fetch(`${API_URL}/api/scan?date=${date}&market=${encodeURIComponent(market)}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (!data || data.source !== "BSD") throw new Error("Backend zwrócił nieoczekiwany format danych.");
