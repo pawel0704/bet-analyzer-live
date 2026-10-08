@@ -666,6 +666,17 @@ async function analyzeEvent(event, predictionMap, marketType = "ALL") {
   const prediction = predictionMap.get(event.id) || null;
   if (!prediction) return { event, status: "REJECT", reason: "NO_PREDICTION" };
   const [oddsRaw, oddsFeedRaw] = await Promise.all([safe(`/events/${event.id}/odds/`), safe(`/events/${event.id}/?sport=football`, { odds: true })]);
+  // The BSD /events/ list does not always include league metadata. The event-detail
+  // response used here can contain it, so merge it into the normalized event before
+  // the pick is returned to the frontend.
+  if (!event.league && oddsFeedRaw) {
+    const detailEvent = normalizeEvent(oddsFeedRaw);
+    if (detailEvent?.league) {
+      event.league = detailEvent.league;
+      event.leagueId = detailEvent.leagueId ?? event.leagueId;
+      event.seasonId = detailEvent.seasonId ?? event.seasonId;
+    }
+  }
   const markets = mergeOdds(extractOdds(oddsRaw), extractOdds(oddsFeedRaw));
   if (!Object.values(markets).some(rows => rows.length)) return { event, status: "REJECT", reason: "NO_RECOGNIZED_ODDS", prediction };
   const exchange = await getWom(event.id);
