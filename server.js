@@ -137,7 +137,7 @@ function normalizeEvent(raw) {
     date: raw.event_date ?? raw.date ?? raw.startTime ?? raw.start_time ?? raw.utcDate ?? raw.kickoff ?? fixture.event_date ?? fixture.date ?? fixture.startTime ?? fixture.start_time ?? fixture.utcDate ?? fixture.kickoff ?? null,
     status: status(raw),
     league,
-    leagueId: num(raw.league?.id ?? raw.competition?.id ?? raw.tournament?.id ?? raw.leagueId ?? raw.competitionId ?? raw.tournamentId),
+    leagueId: num(raw.league?.id ?? raw.competition?.id ?? raw.tournament?.id ?? raw.leagueId ?? raw.league_id ?? raw.competitionId ?? raw.competition_id ?? raw.tournamentId ?? raw.tournament_id ?? fixture.league?.id ?? fixture.competition?.id ?? fixture.tournament?.id ?? fixture.leagueId ?? fixture.league_id ?? fixture.competitionId ?? fixture.competition_id ?? fixture.tournamentId ?? fixture.tournament_id),
     seasonId: num(raw.season?.id ?? raw.seasonId),
     home, away,
     referee: firstObject(raw.referee, raw.official, fixture.referee),
@@ -641,7 +641,23 @@ async function getWom(eventId) {
 
 async function getEvents(date) {
   const d = await safe(`/events/?date_from=${encodeURIComponent(date)}&date_to=${encodeURIComponent(date)}&status=upcoming&limit=200`);
-  return collection(d).map(normalizeEvent).filter(Boolean).filter(e => e.status === "notstarted");
+  const events = collection(d).map(normalizeEvent).filter(Boolean).filter(e => e.status === "notstarted");
+
+  // BSD v2 events can expose only league_id. Resolve those ids through the
+  // documented league endpoint so every returned pick has a real league name.
+  const leagueIds = [...new Set(events.map(e => e.leagueId).filter(id => Number.isFinite(id)))];
+  if (leagueIds.length) {
+    const resolved = await Promise.all(leagueIds.map(async id => {
+      const data = await safe(`/leagues/${id}/`);
+      const league = data && typeof data === "object" ? data : null;
+      return [id, league?.name || null];
+    }));
+    const names = new Map(resolved.filter(([, name]) => name).map(([id, name]) => [id, name]));
+    for (const event of events) {
+      if (!event.league && names.has(event.leagueId)) event.league = names.get(event.leagueId);
+    }
+  }
+  return events;
 }
 
 function mergeOdds(a, b) {
