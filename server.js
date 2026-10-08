@@ -492,7 +492,10 @@ function summarizeForm(data, teamId) {
 async function getTeamForm(teamId) {
   if (teamId === null) return { matches: 0, form: [], points: 0, goalDifference: 0 };
   const data = await safe(`/teams/${encodeURIComponent(teamId)}/fixtures/?status=finished&limit=10`);
-  return summarizeForm(data, teamId);
+  const primary = summarizeForm(data, teamId);
+  if (primary.matches > 0) return primary;
+  const fallback = await safe(`/teams/${encodeURIComponent(teamId)}/fixtures/?limit=30`);
+  return summarizeForm(fallback, teamId);
 }
 
 function numericStat(data, keys) {
