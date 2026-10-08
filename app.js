@@ -97,6 +97,7 @@ function renderCards(picks) {
           <h3>#${i + 1} ${escapeHtml(eventName(p.event))}</h3>
           <strong>${Number(p.probability).toFixed(1)}%</strong>
         </div>
+        <p class="note"><strong>Liga:</strong> ${escapeHtml(p.event?.league || p.event?.competition || "Nieznana")}</p>
         <p><strong>${escapeHtml(p.label || p.key)}</strong> · kurs ${escapeHtml(p.odds)}</p>
         <p>Score: <strong>${escapeHtml(p.score)}</strong> · Edge: <strong>${escapeHtml(p.edge)} pp</strong></p>
         <p>Ruch kursu: <strong>${escapeHtml(movement.movement || "UNKNOWN")}</strong></p>
