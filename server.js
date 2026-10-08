@@ -120,7 +120,7 @@ function normalizeEvent(raw) {
   if (raw.away_team && typeof raw.away_team === "string") away.name = raw.away_team;
   const id = num(raw.id ?? raw.event_id ?? raw.eventId ?? fixture.id ?? fixture.event_id ?? fixture.eventId);
   if (id === null) return null;
-  const leagueValue = firstObject(raw.league, raw.competition, raw.tournament, fixture.league, fixture.competition, fixture.tournament);
+  const leagueValue = firstObject(source.league, source.competition, source.tournament, raw.league, raw.competition, raw.tournament, fixture.league, fixture.competition, fixture.tournament);
   const league = leagueValue?.name
     ?? raw.leagueName ?? raw.league_name
     ?? raw.competitionName ?? raw.competition_name
