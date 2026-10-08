@@ -407,6 +407,16 @@ function score(candidate) {
   let value = 50;
   if (candidate.probability >= 90) value += 18; else if (candidate.probability >= 85) value += 15; else if (candidate.probability >= 80) value += 12; else if (candidate.probability >= 75) value += 8; else if (candidate.probability >= 70) value += 4;
   if (candidate.edge >= 8) value += 12; else if (candidate.edge >= 5) value += 9; else if (candidate.edge >= 3) value += 5; else if (candidate.edge >= 2) value += 2;
+  // Market-implied probability is a strength signal, not a value-bet gate.
+  // A high-probability market can remain a strong pick even when model edge is negative.
+  const marketProbability = num(candidate.impliedProbability);
+  if (marketProbability !== null) {
+    if (marketProbability >= 85) value += 10;
+    else if (marketProbability >= 80) value += 8;
+    else if (marketProbability >= 75) value += 5;
+    else if (marketProbability >= 70) value += 3;
+    if (candidate.probability >= 70 && marketProbability >= 75) value += 2;
+  }
   if (candidate.marketMovement.movement === "SHORTENING") value += 7;
   if (candidate.marketMovement.movement === "DRIFTING") value -= 25;
   if (candidate.confidence !== null) { if (candidate.confidence >= 90) value += 5; else if (candidate.confidence >= 80) value += 3; }
@@ -609,7 +619,9 @@ function mergeOdds(a, b) {
 }
 
 function qualify(candidate) {
-  return candidate.probability >= MIN_PROBABILITY && candidate.edge >= MIN_EDGE && candidate.score >= MIN_SCORE && candidate.marketMovement.movement !== "DRIFTING";
+  return candidate.probability >= MIN_PROBABILITY &&
+    candidate.score >= MIN_SCORE &&
+    candidate.marketMovement.movement !== "DRIFTING";
 }
 
 async function analyzeEvent(event, predictionMap) {
