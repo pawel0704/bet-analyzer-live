@@ -57,14 +57,14 @@
 
   <section id="basketball" class="panel hidden">
     <h2>Koszykówka</h2>
-    <p class="note">Typy na zwycięstwo gospodarzy lub gości na podstawie prognoz i kursów BSD. Wymaga dostępu do Basketball API.</p>
+    <p class="note">Analiza kursów zwycięstwa z API-Sports. Prawdopodobieństwo jest wyliczane z kursów bukmacherskich, a nie z niezależnego modelu. Wymaga klucza API-Sports na backendzie.</p>
     <button id="scanBasketball" class="primary">Skanuj koszykówkę</button>
     <div id="basketballCards"></div>
   </section>
 
   <section id="tennis" class="panel hidden">
     <h2>Tenis</h2>
-    <p class="note">Typy na zwycięzcę meczu na podstawie prognoz i kursów BSD. Wymaga dostępu do Tennis API.</p>
+    <p class="note">Analiza kursów zwycięzcy meczu z Tennis API. Na planie darmowym prawdopodobieństwo pochodzi z rynku bukmacherskiego; niezależna prognoza modelu może wymagać płatnego planu. Wymaga klucza RapidAPI na backendzie.</p>
     <button id="scanTennis" class="primary">Skanuj tenis</button>
     <div id="tennisCards"></div>
   </section>
@@ -93,6 +93,6 @@
     <p class="note">Klucze Sportmonks/Betfair wpisuje się wyłącznie jako zmienne środowiskowe backendu. Nie wkładaj ich do GitHuba ani do PWA.</p>
   </section>
 </main>
-<script src="app.js?v=20261009-highoddsbackend2"></script>
+<script src="app.js?v=20261009-external-sports1"></script>
 </body>
 </html>
