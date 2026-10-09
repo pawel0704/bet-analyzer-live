@@ -171,8 +171,10 @@ async function scan(sport = "football", boxId = "cards", buttonId = "scan") {
   setStatus("Łączenie z backendem…", true);
   try {
     const date = todayWarsaw();
-    const market = $("marketType")?.value || "ALL";
-    const response = await fetch(`${API_URL}/api/scan?date=${date}&market=${encodeURIComponent(market)}&sport=${encodeURIComponent(sport)}`, { cache: "no-store" });
+    const market = boxId === "highOddsCards" ? "ALL" : ($("marketType")?.value || "ALL");
+    const minOdds = boxId === "highOddsCards" ? Math.max(1.80, Number($("highOddsMin")?.value || 1.80)) : null;
+    const highOddsParam = minOdds === null ? "" : `&minOdds=${encodeURIComponent(minOdds)}`;
+    const response = await fetch(`${API_URL}/api/scan?date=${date}&market=${encodeURIComponent(market)}&sport=${encodeURIComponent(sport)}${highOddsParam}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (data.error === "SPORTS_ADDON_REQUIRED") throw new Error("BSD wymaga aktywnego dodatku Sports Addon dla tego sportu.");
@@ -236,13 +238,7 @@ function setupTabs() {
       const panel = $(tab.dataset.tab);
       if (panel) panel.classList.remove("hidden");
       if (tab.dataset.tab === "history") renderHistory();
-      if (tab.dataset.tab === "highOdds") {
-        const last = JSON.parse(localStorage.getItem("betAnalyzerLastScan") || "null");
-        if (last && last.sport !== "basketball" && last.sport !== "tennis") {
-          const minOdds = Math.max(1.01, Number($("highOddsMin")?.value || 1.80));
-          renderCards(applyFilters(last.picks || []).filter(p => Number(p.odds) >= minOdds), last, "highOddsCards");
-        } else scan("football", "highOddsCards", "scanHighOdds");
-      }
+      if (tab.dataset.tab === "highOdds") scan("football", "highOddsCards", "scanHighOdds");
       if (tab.dataset.tab === "basketball") scan("basketball", "basketballCards", "scanBasketball");
       if (tab.dataset.tab === "tennis") scan("tennis", "tennisCards", "scanTennis");
     });
@@ -256,13 +252,7 @@ function setup() {
   if ($("scanHighOdds")) $("scanHighOdds").addEventListener("click", () => scan("football", "highOddsCards", "scanHighOdds"));
   if ($("scanBasketball")) $("scanBasketball").addEventListener("click", () => scan("basketball", "basketballCards", "scanBasketball"));
   if ($("scanTennis")) $("scanTennis").addEventListener("click", () => scan("tennis", "tennisCards", "scanTennis"));
-  if ($("highOddsMin")) $("highOddsMin").addEventListener("change", () => {
-    const last = JSON.parse(localStorage.getItem("betAnalyzerLastScan") || "null");
-    if (last && last.sport !== "basketball" && last.sport !== "tennis") {
-      const minOdds = Math.max(1.01, Number($("highOddsMin").value || 1.80));
-      renderCards(applyFilters(last.picks || []).filter(p => Number(p.odds) >= minOdds), last, "highOddsCards");
-    }
-  });
+  if ($("highOddsMin")) $("highOddsMin").addEventListener("change", () => scan("football", "highOddsCards", "scanHighOdds"));
   if ($("save")) $("save").addEventListener("click", () => {
     const value = ($("backend").value || "").trim().replace(/\/$/, "");
     if (!value) return;
@@ -275,10 +265,7 @@ function setup() {
       const last = JSON.parse(localStorage.getItem("betAnalyzerLastScan") || "null");
       if (last) {
         const active = document.querySelector(".tab.active")?.dataset.tab || "scanner";
-        if (active === "highOdds") {
-          const minOdds = Math.max(1.01, Number($("highOddsMin")?.value || 1.80));
-          renderCards(applyFilters(last.picks || []).filter(p => Number(p.odds) >= minOdds), last, "highOddsCards");
-        } else if (active === "scanner") renderCards(applyFilters(last.picks || []), last, "cards");
+        if (active === "scanner") renderCards(applyFilters(last.picks || []), last, "cards");
       }
     });
   });
