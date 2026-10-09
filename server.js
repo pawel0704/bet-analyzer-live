@@ -790,7 +790,7 @@ async function scan(date, marketType = "ALL") {
       const reasons = [];
       if (c.probability < MIN_PROBABILITY) reasons.push("LOW_PROBABILITY");
       if (c.odds < MIN_ODDS) reasons.push("ODDS_TOO_LOW");
-      if (c.edge < 0) reasons.push("NEGATIVE_EDGE_WARNING");
+      const warnings = c.edge < 0 ? ["NEGATIVE_EDGE_WARNING"] : [];
       const requiredScore = c.probability >= 70 ? Math.min(MIN_SCORE, 62) : MIN_SCORE;
       if (c.score < requiredScore) reasons.push("LOW_SCORE");
       if (c.marketMovement?.movement === "DRIFTING") reasons.push("DRIFTING");
@@ -807,6 +807,7 @@ async function scan(date, marketType = "ALL") {
         exchangeUsable: Boolean(c.exchange?.usable),
         exchangeStatus: c.exchange?.status ?? null,
         exchangeDivergence: c.exchange?.divergence ?? null,
+        warnings,
         reasons
       };
     });
