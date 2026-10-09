@@ -1,4 +1,4 @@
-const CACHE = "bet-analyzer-2-v10";
+const CACHE = "bet-analyzer-2-v11";
 const ASSETS = ["./", "./index.html", "./styles.css", "./app.js", "./manifest.json", "./icon.svg"];
 
 self.addEventListener("install", event => {
