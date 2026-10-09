@@ -1,10 +1,19 @@
-const VERSION = "7.4.5";
+const VERSION = "7.4.4";
 const APISPORTS_BASKETBALL_BASE = "https://v1.basketball.api-sports.io";
 const TENNIS_API_BASE = "https://tennis-api-atp-wta-itf.p.rapidapi.com";
 const TENNIS_API_HOST = "tennis-api-atp-wta-itf.p.rapidapi.com";
 const n = value => value === null || value === undefined || value === "" ? null : Number.isFinite(Number(value)) ? Number(value) : null;
 const pct = value => { const v = n(value); return v === null ? null : Number((v <= 1 ? v * 100 : v).toFixed(2)); };
 const isoNow = () => new Date().toISOString();
+// Free-tier APIs have strict daily quotas; avoid repeated calls from the app auto-refresh.
+const scanCache = new Map();
+const SCAN_CACHE_TTL_MS = 60 * 60 * 1000;
+function getCached(key) {
+  const item = scanCache.get(key);
+  if (!item || Date.now() - item.time > SCAN_CACHE_TTL_MS) { scanCache.delete(key); return null; }
+  return item.value;
+}
+function setCached(key, value) { scanCache.set(key, { time: Date.now(), value }); return value; }
 const arr = value => Array.isArray(value) ? value : [];
 const obj = value => value && typeof value === "object" && !Array.isArray(value) ? value : {};
 function collect(value, depth = 0) {
@@ -107,6 +116,8 @@ function finalize(sport, date, eventsCount, picks, source, diagnostics = {}) {
   };
 }
 async function scanBasketball(date, apiKey) {
+  const cached = getCached(`basketball:${date}`);
+  if (cached) return cached;
   if (!apiKey) {
     const error = new Error("Brak klucza API-Sports dla koszykówki. Dodaj APISPORTS_BASKETBALL_KEY w zmiennych środowiskowych Render.");
     error.status = 503; error.code = "APISPORTS_BASKETBALL_KEY_MISSING"; throw error;
@@ -135,7 +146,7 @@ async function scanBasketball(date, apiKey) {
     if (homeProb !== null) picks.push(makePick({ sport: "basketball", id, league: game.league?.name ?? game.league_name ?? "Koszykówka", date: game.date ?? date, homeName, awayName, side: "home", odds: parsed.home, probability: homeProb, bookmaker: parsed.bookmaker, probabilitySource: "API-SPORTS_BOOKMAKER_IMPLIED" }));
     if (awayProb !== null) picks.push(makePick({ sport: "basketball", id, league: game.league?.name ?? game.league_name ?? "Koszykówka", date: game.date ?? date, homeName, awayName, side: "away", odds: parsed.away, probability: awayProb, bookmaker: parsed.bookmaker, probabilitySource: "API-SPORTS_BOOKMAKER_IMPLIED" }));
   }
-  return finalize("basketball", date, games.length, picks, "API-Sports Basketball", { oddsRecords: oddsRows.length });
+  return setCached(`basketball:${date}`, finalize("basketball", date, games.length, picks, "API-Sports Basketball", { oddsRecords: oddsRows.length }));
 }
 function tennisMatches(data) {
   const direct = collect(data);
@@ -157,6 +168,8 @@ function tennisOdds(match) {
   return { p1: p1 > 1 ? p1 : null, p2: p2 > 1 ? p2 : null, bookmaker };
 }
 async function scanTennis(date, apiKey) {
+  const cached = getCached(`tennis:${date}`);
+  if (cached) return cached;
   if (!apiKey) {
     const error = new Error("Brak klucza Tennis API. Dodaj TENNIS_API_KEY w zmiennych środowiskowych Render.");
     error.status = 503; error.code = "TENNIS_API_KEY_MISSING"; throw error;
@@ -181,7 +194,7 @@ async function scanTennis(date, apiKey) {
     if (p1 !== null) picks.push(makePick({ sport: "tennis", id, league, date: match.date ?? date, homeName, awayName, side: "home", odds: odds.p1, probability: p1, bookmaker: odds.bookmaker, probabilitySource: "TENNIS_API_BOOKMAKER_IMPLIED" }));
     if (p2 !== null) picks.push(makePick({ sport: "tennis", id, league, date: match.date ?? date, homeName, awayName, side: "away", odds: odds.p2, probability: p2, bookmaker: odds.bookmaker, probabilitySource: "TENNIS_API_BOOKMAKER_IMPLIED" }));
   }
-  return finalize("tennis", date, matches.length, picks, "Tennis API (RapidAPI)", { oddsRecords: matches.filter(m => tennisOdds(m).p1 && tennisOdds(m).p2).length });
+  return setCached(`tennis:${date}`, finalize("tennis", date, matches.length, picks, "Tennis API (RapidAPI)", { oddsRecords: matches.filter(m => tennisOdds(m).p1 && tennisOdds(m).p2).length }));
 }
 async function scanExtraSport(sport, date, config = {}) {
   if (sport === "basketball") return scanBasketball(date, config.apisportsBasketballKey || "");
