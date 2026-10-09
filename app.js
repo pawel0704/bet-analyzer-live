@@ -90,6 +90,11 @@ function renderCards(picks, scanData = {}, boxId = "cards") {
   const box = $(boxId);
   if (!box) return;
   if (!picks.length) {
+    if (boxId === "highOddsCards" && Array.isArray(scanData.picks) && scanData.picks.length) {
+      const minOdds = Math.max(1.01, Number($("highOddsMin")?.value || 1.80));
+      box.innerHTML = '<div class="note"><strong>Brak kwalifikujących picków z kursem co najmniej ' + escapeHtml(minOdds.toFixed(2)) + '.</strong><p>Na dziś skan nie zwrócił typu piłkarskiego spełniającego ten filtr. Nie obniżono kryteriów pozostałych typów.</p></div>';
+      return;
+    }
     const diagnostics = scanData.diagnostics || {};
     const reasonCounts = diagnostics.reasons && typeof diagnostics.reasons === "object"
       ? Object.entries(diagnostics.reasons).sort((a, b) => Number(b[1]) - Number(a[1]))
