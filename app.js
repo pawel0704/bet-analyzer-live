@@ -76,7 +76,14 @@ function renderExchange(data) {
 function scheduleRefresh() {
   const seconds = Math.max(5, Number($("refresh")?.value || 15));
   clearInterval(window.betAnalyzerRefresh);
-  window.betAnalyzerRefresh = setInterval(() => { if (!document.hidden) scan(); }, seconds * 1000);
+  window.betAnalyzerRefresh = setInterval(() => {
+    if (document.hidden) return;
+    const active = document.querySelector(".tab.active")?.dataset.tab || "scanner";
+    if (active === "scanner") scan("football", "cards", "scan");
+    else if (active === "highOdds") scan("football", "highOddsCards", "scanHighOdds");
+    else if (active === "basketball") scan("basketball", "basketballCards", "scanBasketball");
+    else if (active === "tennis") scan("tennis", "tennisCards", "scanTennis");
+  }, seconds * 1000);
 }
 
 function renderCards(picks, scanData = {}, boxId = "cards") {
