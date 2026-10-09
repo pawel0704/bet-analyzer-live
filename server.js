@@ -709,7 +709,9 @@ async function analyzeEvent(event, predictionMap, marketType = "ALL") {
   return { event, status: "ANALYZED", reason: null, prediction, candidates: initial, qualified: [], exchange, markets };
 }
 
-async function scan(date, marketType = "ALL") {
+async function scan(date, marketType = "ALL", minOddsOverride = null) {
+  const highOddsMode = minOddsOverride !== null && Number.isFinite(Number(minOddsOverride));
+  const targetMinOdds = highOddsMode ? Math.max(MIN_ODDS, Number(minOddsOverride)) : MIN_ODDS;
   const [events, predictionMap] = await Promise.all([getEvents(date), getPredictionMap(date)]);
   const selected = events.sort((a, b) => (dateObj(a.date)?.getTime() ?? Number.MAX_SAFE_INTEGER) - (dateObj(b.date)?.getTime() ?? Number.MAX_SAFE_INTEGER)).slice(0, MAX_SCAN_EVENTS);
   const results = [];
@@ -727,7 +729,7 @@ async function scan(date, marketType = "ALL") {
   // Prefer candidates whose odds can pass qualification. High-scoring Over 1.5
   // picks at odds 1.03-1.17 previously consumed the enrichment budget and hid
   // other markets. Keep the old score-first fallback for useful diagnostics.
-  const oddsEligible = allCandidates.filter(item => Number(item.candidate.odds) >= MIN_ODDS);
+  const oddsEligible = allCandidates.filter(item => Number(item.candidate.odds) >= targetMinOdds);
   const enrichmentPool = oddsEligible.length ? oddsEligible : allCandidates;
   const preliminary = enrichmentPool
     .sort((a, b) => {
@@ -737,10 +739,10 @@ async function scan(date, marketType = "ALL") {
       // Spend the limited enrichment budget on candidates that pass the
       // probability/odds/movement gates, then prioritize score and probability.
       const aRawEligible = aCandidate.probability >= MIN_PROBABILITY &&
-        aCandidate.odds >= MIN_ODDS &&
+        aCandidate.odds >= targetMinOdds &&
         aCandidate.marketMovement?.movement !== "DRIFTING";
       const bRawEligible = bCandidate.probability >= MIN_PROBABILITY &&
-        bCandidate.odds >= MIN_ODDS &&
+        bCandidate.odds >= targetMinOdds &&
         bCandidate.marketMovement?.movement !== "DRIFTING";
       if (aRawEligible !== bRawEligible) return Number(bRawEligible) - Number(aRawEligible);
       const aOver15 = aCandidate.key === "OVER15" ? 1 : 0;
@@ -791,6 +793,7 @@ async function scan(date, marketType = "ALL") {
       const reasons = [];
       if (c.probability < MIN_PROBABILITY) reasons.push("LOW_PROBABILITY");
       if (c.odds < MIN_ODDS) reasons.push("ODDS_TOO_LOW");
+      if (highOddsMode && c.odds < targetMinOdds) reasons.push("BELOW_HIGH_ODDS_MINIMUM");
       const warnings = c.edge < 0 ? ["NEGATIVE_EDGE_WARNING"] : [];
       const requiredScore = c.probability >= 70 ? Math.min(MIN_SCORE, 62) : MIN_SCORE;
       if (c.score < requiredScore) reasons.push("LOW_SCORE");
@@ -818,6 +821,7 @@ async function scan(date, marketType = "ALL") {
   for (const item of enrichedCandidates.sort((a, b) => b.candidate.probability - a.candidate.probability || b.candidate.score - a.candidate.score || b.candidate.edge - a.candidate.edge)) {
     const c = item.candidate;
     if (!qualify(c)) continue;
+    if (c.odds < targetMinOdds) continue;
     const eventId = String(item.result.event.id);
     if (usedEvents.has(eventId)) continue;
     // In the general scan, avoid filling the entire list with one market.
@@ -1015,7 +1019,7 @@ app.get("/api/debug-wom", async (req, res) => {
 });
 app.get("/api/events", async (req, res) => { try { const date = req.query.date || nowIso().slice(0, 10); const events = await getEvents(date); res.json({ ok: true, source: SOURCE, version: VERSION, date, count: events.length, events }); } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.code || e.message }); } });
 app.get("/api/predictions", async (req, res) => { try { const map = await getPredictionMap(); res.json({ ok: true, source: SOURCE, version: VERSION, count: map.size, predictions: [...map.entries()].map(([eventId, prediction]) => ({ eventId, prediction })) }); } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.code || e.message }); } });
-app.get(["/api/scan", "/api/top-picks"], async (req, res) => { try { const date = req.query.date || nowIso().slice(0, 10); const sport = String(req.query.sport || "football").toLowerCase(); if (sport === "basketball" || sport === "tennis") return res.json(await scanExtraSport(sport, date, BSD_API_KEY)); if (sport !== "football") return res.status(400).json({ ok: false, source: SOURCE, version: VERSION, error: "UNSUPPORTED_SPORT" }); return res.json(await scan(date, String(req.query.market || "ALL").toUpperCase())); } catch (e) { res.status(e.status || 500).json({ ok: false, source: SOURCE, version: VERSION, error: e.code || e.message, message: e.message || e.code || "Scan failed" }); } });
+app.get(["/api/scan", "/api/top-picks"], async (req, res) => { try { const date = req.query.date || nowIso().slice(0, 10); const sport = String(req.query.sport || "football").toLowerCase(); if (sport === "basketball" || sport === "tennis") return res.json(await scanExtraSport(sport, date, BSD_API_KEY)); if (sport !== "football") return res.status(400).json({ ok: false, source: SOURCE, version: VERSION, error: "UNSUPPORTED_SPORT" }); const minOdds = req.query.minOdds !== undefined ? num(req.query.minOdds) : null; return res.json(await scan(date, String(req.query.market || "ALL").toUpperCase(), minOdds)); } catch (e) { res.status(e.status || 500).json({ ok: false, source: SOURCE, version: VERSION, error: e.code || e.message, message: e.message || e.code || "Scan failed" }); } });
 app.get("/api/analyze/:id", async (req, res) => { try { const id = num(req.params.id); if (id === null) return res.status(400).json({ ok: false, error: "INVALID_EVENT_ID" }); const raw = await safe(`/events/${encodeURIComponent(id)}/`); const event = normalizeEvent(raw); if (!event) return res.status(404).json({ ok: false, error: "EVENT_NOT_FOUND" }); const map = await getPredictionMap(); res.json({ ok: true, source: SOURCE, version: VERSION, ...(await analyzeEvent(event, map)) }); } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.code || e.message }); } });
 app.get("/api/events/:id/odds", async (req, res) => { const id = num(req.params.id); if (id === null) return res.status(400).json({ ok: false, error: "INVALID_EVENT_ID" }); const data = await safe(`/events/${encodeURIComponent(id)}/odds/`); if (!data) return res.status(404).json({ ok: false, error: "ODDS_NOT_FOUND" }); res.json({ ok: true, source: SOURCE, version: VERSION, eventId: id, data, parsed: extractOdds(data) }); });
 app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND", path: req.path, version: VERSION }));
