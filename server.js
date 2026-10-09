@@ -13,6 +13,8 @@ const VERSION = "7.4.4";
 const SOURCE = "BSD";
 const PORT = Number(process.env.PORT || 10000);
 const BSD_API_KEY = process.env.BSD_API_KEY || "";
+const APISPORTS_BASKETBALL_KEY = process.env.APISPORTS_BASKETBALL_KEY || "";
+const TENNIS_API_KEY = process.env.TENNIS_API_KEY || "";
 const BSD_BASE_URL = process.env.BSD_BASE_URL || "https://sports.bzzoiro.com/api/v2";
 const BSD_PREDICTIONS_BASE_URL = process.env.BSD_PREDICTIONS_BASE_URL || "https://sports.bzzoiro.com/api";
 const WOM_BASE_URL = process.env.WOM_BASE_URL || "https://sports.bzzoiro.com/wom/api";
@@ -923,7 +925,7 @@ function selfTest() {
 }
 
 app.get("/", (req, res) => res.json({ ok: true, service: "Bet Analyzer Backend", version: VERSION, source: SOURCE, time: nowIso() }));
-app.get(["/health", "/api/health"], (req, res) => res.json({ ok: true, version: VERSION, source: SOURCE, bsdConfigured: Boolean(BSD_API_KEY), wom: { enabled: USE_WOM, minVolume: WOM_MIN_VOLUME }, time: nowIso() }));
+app.get(["/health", "/api/health"], (req, res) => res.json({ ok: true, version: VERSION, source: SOURCE, bsdConfigured: Boolean(BSD_API_KEY), externalSports: { basketball: { provider: "API-Sports", configured: Boolean(APISPORTS_BASKETBALL_KEY) }, tennis: { provider: "Tennis API (RapidAPI)", configured: Boolean(TENNIS_API_KEY) } }, wom: { enabled: USE_WOM, minVolume: WOM_MIN_VOLUME }, time: nowIso() }));
 async function diagnosticRequest(base, path) {
   const started = Date.now();
   try {
@@ -1019,7 +1021,7 @@ app.get("/api/debug-wom", async (req, res) => {
 });
 app.get("/api/events", async (req, res) => { try { const date = req.query.date || nowIso().slice(0, 10); const events = await getEvents(date); res.json({ ok: true, source: SOURCE, version: VERSION, date, count: events.length, events }); } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.code || e.message }); } });
 app.get("/api/predictions", async (req, res) => { try { const map = await getPredictionMap(); res.json({ ok: true, source: SOURCE, version: VERSION, count: map.size, predictions: [...map.entries()].map(([eventId, prediction]) => ({ eventId, prediction })) }); } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.code || e.message }); } });
-app.get(["/api/scan", "/api/top-picks"], async (req, res) => { try { const date = req.query.date || nowIso().slice(0, 10); const sport = String(req.query.sport || "football").toLowerCase(); if (sport === "basketball" || sport === "tennis") return res.json(await scanExtraSport(sport, date, BSD_API_KEY)); if (sport !== "football") return res.status(400).json({ ok: false, source: SOURCE, version: VERSION, error: "UNSUPPORTED_SPORT" }); const minOdds = req.query.minOdds !== undefined ? num(req.query.minOdds) : null; return res.json(await scan(date, String(req.query.market || "ALL").toUpperCase(), minOdds)); } catch (e) { res.status(e.status || 500).json({ ok: false, source: SOURCE, version: VERSION, error: e.code || e.message, message: e.message || e.code || "Scan failed" }); } });
+app.get(["/api/scan", "/api/top-picks"], async (req, res) => { try { const date = req.query.date || nowIso().slice(0, 10); const sport = String(req.query.sport || "football").toLowerCase(); if (sport === "basketball" || sport === "tennis") return res.json(await scanExtraSport(sport, date, { apisportsBasketballKey: APISPORTS_BASKETBALL_KEY, tennisApiKey: TENNIS_API_KEY })); if (sport !== "football") return res.status(400).json({ ok: false, source: SOURCE, version: VERSION, error: "UNSUPPORTED_SPORT" }); const minOdds = req.query.minOdds !== undefined ? num(req.query.minOdds) : null; return res.json(await scan(date, String(req.query.market || "ALL").toUpperCase(), minOdds)); } catch (e) { res.status(e.status || 500).json({ ok: false, source: SOURCE, version: VERSION, error: e.code || e.message, message: e.message || e.code || "Scan failed" }); } });
 app.get("/api/analyze/:id", async (req, res) => { try { const id = num(req.params.id); if (id === null) return res.status(400).json({ ok: false, error: "INVALID_EVENT_ID" }); const raw = await safe(`/events/${encodeURIComponent(id)}/`); const event = normalizeEvent(raw); if (!event) return res.status(404).json({ ok: false, error: "EVENT_NOT_FOUND" }); const map = await getPredictionMap(); res.json({ ok: true, source: SOURCE, version: VERSION, ...(await analyzeEvent(event, map)) }); } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.code || e.message }); } });
 app.get("/api/events/:id/odds", async (req, res) => { const id = num(req.params.id); if (id === null) return res.status(400).json({ ok: false, error: "INVALID_EVENT_ID" }); const data = await safe(`/events/${encodeURIComponent(id)}/odds/`); if (!data) return res.status(404).json({ ok: false, error: "ODDS_NOT_FOUND" }); res.json({ ok: true, source: SOURCE, version: VERSION, eventId: id, data, parsed: extractOdds(data) }); });
 app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND", path: req.path, version: VERSION }));
