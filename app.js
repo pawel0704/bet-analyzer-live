@@ -181,7 +181,7 @@ async function scan(sport = "football", boxId = "cards", buttonId = "scan") {
       if (data.error === "BSD_AUTH_REQUIRED") throw new Error("BSD odrzucił klucz API. Sprawdź konfigurację backendu.");
       throw new Error(data.message || data.error || `HTTP ${response.status}`);
     }
-    if (!data || data.source !== "BSD") throw new Error("Backend zwrócił nieoczekiwany format danych.");
+    if (!data || !["BSD", "EXTERNAL_APIS"].includes(data.source)) throw new Error("Backend zwrócił nieoczekiwany format danych.");
     localStorage.setItem("betAnalyzerLastScan", JSON.stringify(data));
     let filtered = sport === "football"
       ? applyFilters(data.picks || [])
