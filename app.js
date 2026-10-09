@@ -100,8 +100,10 @@ function renderCards(picks, scanData = {}) {
         audit.slice().sort((a, b) => {
           const aReasons = Array.isArray(a.reasons) ? a.reasons.length : 0;
           const bReasons = Array.isArray(b.reasons) ? b.reasons.length : 0;
+          const aEdge = Number.isFinite(Number(a.edge)) ? Number(a.edge) : -999;
+          const bEdge = Number.isFinite(Number(b.edge)) ? Number(b.edge) : -999;
           return aReasons - bReasons ||
-            (Number(b.edge) || -999) - (Number(a.edge) || -999) ||
+            bEdge - aEdge ||
             (Number(b.probability) || 0) - (Number(a.probability) || 0);
         }).slice(0, 5).map(item => {
           const name = eventName(item.event || item.match || item.teams || item);
