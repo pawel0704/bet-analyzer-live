@@ -191,18 +191,19 @@ function parsePrediction(p) {
   return { home, draw, away, over15, over25, over35, under25, under35, btts: bttsYes, bttsNo, confidence, predicted, expectedGoals, mostLikelyScore, favorite, favoriteProb, recommendations, raw: p };
 }
 async function getPredictionMap(date = nowIso().slice(0, 10)) {
-  const key = `predictions:${date}:v8`;
+  const key = `predictions:${date}:v9`;
   const cached = cacheGet(key);
 
   if (cached) return cached;
 
-  // BSD documents /api/predictions/ as the current football prediction feed.
-  // Date filters override `upcoming`, so use the date-scoped request first and
-  // include Europe/Warsaw to align the feed with the app's requested match day.
+  // BSD feeds can return a non-empty date-filtered page that does not contain
+  // predictions for the event IDs returned by /events/. Merge the date-scoped
+  // and upcoming feeds instead of stopping at the first non-empty response.
+  // This prevents a partial/mismatched date response from hiding usable records.
   const queries = [
     `/predictions/?date_from=${encodeURIComponent(date)}&date_to=${encodeURIComponent(date)}&tz=Europe%2FWarsaw&limit=200&offset=0`,
-    `/predictions/?upcoming=true&limit=200&offset=0`,
-    `/predictions/?date_from=${encodeURIComponent(date)}&date_to=${encodeURIComponent(date)}&limit=200&offset=0`
+    `/predictions/?date_from=${encodeURIComponent(date)}&date_to=${encodeURIComponent(date)}&limit=200&offset=0`,
+    `/predictions/?upcoming=true&limit=200&offset=0`
   ];
 
   const map = new Map();
@@ -213,7 +214,6 @@ async function getPredictionMap(date = nowIso().slice(0, 10)) {
       const prediction = parsePrediction(row);
       if (id !== null && prediction) map.set(id, prediction);
     }
-    if (map.size > 0) break;
   }
 
   return cacheSet(key, map);
