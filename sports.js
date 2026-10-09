@@ -2,7 +2,7 @@ const VERSION = "7.4.4";
 const ROOT = "https://sports.bzzoiro.com";
 
 const rows = value => Array.isArray(value) ? value : Array.isArray(value?.results) ? value.results : Array.isArray(value?.data) ? value.data : [];
-const n = value => Number.isFinite(Number(value)) ? Number(value) : null;
+const n = value => value === null || value === undefined || value === "" ? null : Number.isFinite(Number(value)) ? Number(value) : null;
 const percent = value => {
   const v = n(value);
   return v === null ? null : Number((v <= 1 ? v * 100 : v).toFixed(2));
