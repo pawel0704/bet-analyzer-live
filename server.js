@@ -710,19 +710,32 @@ async function scan(date, marketType = "ALL") {
   const [events, predictionMap] = await Promise.all([getEvents(date), getPredictionMap(date)]);
   const selected = events.sort((a, b) => (dateObj(a.date)?.getTime() ?? Number.MAX_SAFE_INTEGER) - (dateObj(b.date)?.getTime() ?? Number.MAX_SAFE_INTEGER)).slice(0, MAX_SCAN_EVENTS);
   const results = [];
-  for (let i = 0; i < selected.length; i += 5) {
-    const batch = selected.slice(i, i + 5);
+  // Keep batches bounded, but avoid serially waiting on every five-event group.
+  // Each event can require several BSD requests, so larger batches reduce scan
+  // time substantially without opening all 40+ events at once.
+  for (let i = 0; i < selected.length; i += 10) {
+    const batch = selected.slice(i, i + 10);
     results.push(...await Promise.all(batch.map(e => analyzeEvent(e, predictionMap).catch(error => ({ event: e, status: "ERROR", reason: error.code || error.message || "ANALYZE_ERROR" })))));
   }
 
-  // Enrich the best raw candidates first. Qualification happens only after
-  // contextual enrichment, so candidates are not discarded prematurely.
+  // Enrich the best raw candidates first. Multiple markets can belong to the
+  // same event; fetch context once per event and share it across its candidates.
   const allCandidates = results.flatMap(r => arr(r.candidates).map(c => ({ candidate: c, result: r })));
   const preliminary = allCandidates
     .sort((a, b) => b.candidate.score - a.candidate.score)
     .slice(0, ENRICH_LIMIT);
+  const uniqueEvents = [...new Map(preliminary.map(item => [String(item.result.event.id), item.result.event])).entries()];
+  const contextEntries = await Promise.all(uniqueEvents.map(async ([id, event]) => {
+    try { return [id, await enrichEvent(event)]; }
+    catch (error) {
+      console.error("[ENRICH]", id, error.code || error.message);
+      return [id, { refereeKnown: false, referee: null, lineup: { quality: "NONE" }, statsAvailable: false, h2hAvailable: false, stats: null, h2h: null, unavailable: { available: false, home: 0, away: 0, total: 0 }, form: { home: { matches: 0, form: [], points: 0, ppg: 0 }, away: { matches: 0, form: [], points: 0, ppg: 0 }, signal: "EVEN", pointsGap: 0 } }];
+    }
+  }));
+  const contextByEvent = new Map(contextEntries);
   for (const item of preliminary) {
-    const context = await enrichEvent(item.result.event);
+    const context = contextByEvent.get(String(item.result.event.id));
+    if (!context) continue;
     const signals = summarizeContextSignals(item.candidate.key, context.stats, context.h2h, context.form.home, context.form.away);
     item.candidate.context = {
       lineupQuality: context.lineup.quality,
