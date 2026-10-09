@@ -96,12 +96,27 @@ function renderCards(picks, scanData = {}) {
     const audit = Array.isArray(diagnostics.candidateAudit) ? diagnostics.candidateAudit
       : Array.isArray(scanData.candidateAudit) ? scanData.candidateAudit : [];
     const auditHtml = audit.length
-      ? '<p><strong>Przykładowe analizowane mecze:</strong></p><ul>' +
-        audit.slice(0, 5).map(item => {
+      ? '<p><strong>Najlepsi kandydaci do sprawdzenia (prawdopodobieństwo · kurs · Edge · Score):</strong></p><ul>' +
+        audit.slice().sort((a, b) => {
+          const aReasons = Array.isArray(a.reasons) ? a.reasons.length : 0;
+          const bReasons = Array.isArray(b.reasons) ? b.reasons.length : 0;
+          const aEdge = Number.isFinite(Number(a.edge)) ? Number(a.edge) : -999;
+          const bEdge = Number.isFinite(Number(b.edge)) ? Number(b.edge) : -999;
+          return aReasons - bReasons ||
+            bEdge - aEdge ||
+            (Number(b.probability) || 0) - (Number(a.probability) || 0);
+        }).slice(0, 5).map(item => {
           const name = eventName(item.event || item.match || item.teams || item);
-          const reasons = Array.isArray(item.reasons) ? item.reasons.join(", ")
-            : (item.reason || item.rejectionReason || item.status || "brak szczegółu");
-          return '<li>' + escapeHtml(name) + ' — ' + escapeHtml(reasons) + '</li>';
+          const market = item.label || item.key || "typ";
+          const probability = Number.isFinite(Number(item.probability)) ? Number(item.probability).toFixed(1) + "%" : "brak %";
+          const odds = Number.isFinite(Number(item.odds)) ? Number(item.odds).toFixed(2) : "brak kursu";
+          const edge = Number.isFinite(Number(item.edge)) ? Number(item.edge).toFixed(2) + " pp" : "brak Edge";
+          const score = Number.isFinite(Number(item.score)) ? Number(item.score).toFixed(0) : "brak";
+          const reasons = Array.isArray(item.reasons) && item.reasons.length ? item.reasons.join(", ") : "bez podstawowych odrzuceń";
+          return '<li><strong>' + escapeHtml(name) + '</strong> — ' + escapeHtml(market) +
+            '<br>Prawdopodobieństwo: ' + escapeHtml(probability) + ' · Kurs: ' + escapeHtml(odds) +
+            ' · Edge: ' + escapeHtml(edge) + ' · Score: ' + escapeHtml(score) +
+            '<br>Powód: ' + escapeHtml(reasons) + '</li>';
         }).join("") + '</ul>'
       : "";
     box.innerHTML = '<div class="note"><strong>Brak kwalifikujących się picków.</strong>' +
