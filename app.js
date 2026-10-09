@@ -112,11 +112,14 @@ function renderCards(picks, scanData = {}) {
           const odds = Number.isFinite(Number(item.odds)) ? Number(item.odds).toFixed(2) : "brak kursu";
           const edge = Number.isFinite(Number(item.edge)) ? Number(item.edge).toFixed(2) + " pp" : "brak Edge";
           const score = Number.isFinite(Number(item.score)) ? Number(item.score).toFixed(0) : "brak";
-          const reasons = Array.isArray(item.reasons) && item.reasons.length ? item.reasons.join(", ") : "bez podstawowych odrzuceń";
+          const reasons = Array.isArray(item.reasons) && item.reasons.length ? item.reasons.join(", ") : "spełnia podstawowe kryteria";
+          const warnings = Array.isArray(item.warnings) && item.warnings.includes("NEGATIVE_EDGE_WARNING")
+            ? '<br><strong>Ostrzeżenie:</strong> ujemny Edge — nie blokuje typu, ale oznacza brak przewagi względem kursu.'
+            : "";
           return '<li><strong>' + escapeHtml(name) + '</strong> — ' + escapeHtml(market) +
             '<br>Prawdopodobieństwo: ' + escapeHtml(probability) + ' · Kurs: ' + escapeHtml(odds) +
             ' · Edge: ' + escapeHtml(edge) + ' · Score: ' + escapeHtml(score) +
-            '<br>Powód: ' + escapeHtml(reasons) + '</li>';
+            '<br>Kryteria: ' + escapeHtml(reasons) + warnings + '</li>';
         }).join("") + '</ul>'
       : "";
     box.innerHTML = '<div class="note"><strong>Brak kwalifikujących się picków.</strong>' +

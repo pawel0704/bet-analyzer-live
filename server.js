@@ -21,7 +21,6 @@ const MAX_SCAN_EVENTS = Math.min(100, Math.max(1, Number(process.env.MAX_SCAN_EV
 const MAX_PICKS = Math.min(10, Math.max(1, Number(process.env.MAX_PICKS || 10)));
 const ENRICH_LIMIT = Math.min(20, Math.max(0, Number(process.env.ENRICH_LIMIT || 12)));
 const MIN_PROBABILITY = Number(process.env.MIN_PROBABILITY || 58);
-const MIN_EDGE = Number(process.env.MIN_EDGE ?? 0);
 const MIN_SCORE = Number(process.env.MIN_SCORE || 68);
 const MIN_ODDS = Number(process.env.MIN_ODDS || 1.20);
 const MAX_PICKS_PER_MARKET = Math.max(1, Number(process.env.MAX_PICKS_PER_MARKET || 3));
@@ -678,7 +677,6 @@ function qualify(candidate) {
   const requiredScore = strongProbability ? Math.min(MIN_SCORE, 62) : MIN_SCORE;
   return candidate.probability >= MIN_PROBABILITY &&
     candidate.odds >= MIN_ODDS &&
-    candidate.edge >= MIN_EDGE &&
     candidate.score >= requiredScore &&
     candidate.marketMovement.movement !== "DRIFTING";
 }
@@ -734,25 +732,22 @@ async function scan(date, marketType = "ALL") {
     .sort((a, b) => {
       const aCandidate = a.candidate;
       const bCandidate = b.candidate;
-      // Spend the limited context-enrichment budget on candidates that can
-      // actually qualify, not merely on high-probability/low-value favorites.
+      // Negative Edge is a value warning, not an automatic rejection.
+      // Spend the limited enrichment budget on candidates that pass the
+      // probability/odds/movement gates, then prioritize score and probability.
       const aRawEligible = aCandidate.probability >= MIN_PROBABILITY &&
         aCandidate.odds >= MIN_ODDS &&
-        aCandidate.edge >= MIN_EDGE &&
         aCandidate.marketMovement?.movement !== "DRIFTING";
       const bRawEligible = bCandidate.probability >= MIN_PROBABILITY &&
         bCandidate.odds >= MIN_ODDS &&
-        bCandidate.edge >= MIN_EDGE &&
         bCandidate.marketMovement?.movement !== "DRIFTING";
       if (aRawEligible !== bRawEligible) return Number(bRawEligible) - Number(aRawEligible);
-      // Among eligible candidates, prioritize real value (edge), then score
-      // and probability. Keep Over 1.5 from monopolizing the enrichment budget.
       const aOver15 = aCandidate.key === "OVER15" ? 1 : 0;
       const bOver15 = bCandidate.key === "OVER15" ? 1 : 0;
-      return bCandidate.edge - aCandidate.edge ||
-        aOver15 - bOver15 ||
-        bCandidate.score - aCandidate.score ||
-        bCandidate.probability - aCandidate.probability;
+      return bCandidate.score - aCandidate.score ||
+        bCandidate.probability - aCandidate.probability ||
+        bCandidate.edge - aCandidate.edge ||
+        aOver15 - bOver15;
     })
     .slice(0, ENRICH_LIMIT);
   const uniqueEvents = [...new Map(preliminary.map(item => [String(item.result.event.id), item.result.event])).entries()];
@@ -795,7 +790,7 @@ async function scan(date, marketType = "ALL") {
       const reasons = [];
       if (c.probability < MIN_PROBABILITY) reasons.push("LOW_PROBABILITY");
       if (c.odds < MIN_ODDS) reasons.push("ODDS_TOO_LOW");
-      if (c.edge < MIN_EDGE) reasons.push("LOW_EDGE");
+      const warnings = c.edge < 0 ? ["NEGATIVE_EDGE_WARNING"] : [];
       const requiredScore = c.probability >= 70 ? Math.min(MIN_SCORE, 62) : MIN_SCORE;
       if (c.score < requiredScore) reasons.push("LOW_SCORE");
       if (c.marketMovement?.movement === "DRIFTING") reasons.push("DRIFTING");
@@ -812,6 +807,7 @@ async function scan(date, marketType = "ALL") {
         exchangeUsable: Boolean(c.exchange?.usable),
         exchangeStatus: c.exchange?.status ?? null,
         exchangeDivergence: c.exchange?.divergence ?? null,
+        warnings,
         reasons
       };
     });
@@ -915,9 +911,9 @@ function selfTest() {
   const womHistoryShape = normalizeWomData({ results: [{ money: [{ market: "1X2_AWAY_FT", volume: 12000, share: 72, price: 1.8, previous_price: 1.9, implied_probability: 55.56 }] }] });
   add("wom_results_shape", womHistoryShape.length === 1 && womHistoryShape[0].market === "1X2_AWAY_FT");
   add("qualification_rejects_drift", qualify({ probability: 70, edge: 5, odds: 2, score: 90, marketMovement: { movement: "DRIFTING" } }) === false);
-  add("qualification_rejects_negative_edge", qualify({ probability: 75, edge: -4.8, odds: 1.25, score: 75, marketMovement: { movement: "UNKNOWN" } }) === false);
-  add("qualification_rejects_edge_below_minimum", qualify({ probability: 75, edge: MIN_EDGE - 0.01, odds: 1.5, score: 75, marketMovement: { movement: "UNKNOWN" } }) === false);
-  add("qualification_accepts_edge_at_minimum", qualify({ probability: 75, edge: MIN_EDGE, odds: 1.5, score: 75, marketMovement: { movement: "UNKNOWN" } }) === true);
+  add("qualification_accepts_negative_edge_when_other_gates_pass", qualify({ probability: 75, edge: -4.8, odds: 1.25, score: 75, marketMovement: { movement: "UNKNOWN" } }) === true);
+  add("qualification_rejects_low_probability", qualify({ probability: MIN_PROBABILITY - 0.1, edge: 5, odds: 1.5, score: 75, marketMovement: { movement: "UNKNOWN" } }) === false);
+  add("qualification_rejects_low_odds", qualify({ probability: 75, edge: 5, odds: MIN_ODDS - 0.01, score: 75, marketMovement: { movement: "UNKNOWN" } }) === false);
   return { version: VERSION, passed: tests.filter(t => t.pass).length, total: tests.length, ok: tests.every(t => t.pass), tests };
 }
 
