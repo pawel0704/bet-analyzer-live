@@ -79,8 +79,8 @@ function scheduleRefresh() {
   window.betAnalyzerRefresh = setInterval(() => { if (!document.hidden) scan(); }, seconds * 1000);
 }
 
-function renderCards(picks, scanData = {}) {
-  const box = $("cards");
+function renderCards(picks, scanData = {}, boxId = "cards") {
+  const box = $(boxId);
   if (!box) return;
   if (!picks.length) {
     const diagnostics = scanData.diagnostics || {};
@@ -139,7 +139,7 @@ function renderCards(picks, scanData = {}) {
           <h3>#${i + 1} ${escapeHtml(eventName(p.event))}</h3>
           <strong>${Number(p.probability).toFixed(1)}%</strong>
         </div>
-        <p class="note"><strong>Liga:</strong> ${escapeHtml(p.event?.league || p.event?.competition || "Nieznana")}</p>
+        <p class="note"><strong>Liga / turniej:</strong> ${escapeHtml(p.event?.league || p.event?.competition || p.league || "Nieznana")}</p>
         <p><strong>${escapeHtml(p.label || p.key)}</strong> · kurs ${escapeHtml(p.odds)}</p>
         <p>Score: <strong>${escapeHtml(p.score)}</strong> · Edge: <strong>${escapeHtml(p.edge)} pp</strong></p>
         <p>Ruch kursu: <strong>${escapeHtml(movement.movement || "UNKNOWN")}</strong></p>
@@ -150,8 +150,8 @@ function renderCards(picks, scanData = {}) {
   }).join("");
 }
 
-async function scan() {
-  const button = $("scan");
+async function scan(sport = "football", boxId = "cards", buttonId = "scan") {
+  const button = $(buttonId);
   if (button) {
     button.disabled = true;
     button.textContent = "Skanowanie…";
@@ -160,20 +160,31 @@ async function scan() {
   try {
     const date = todayWarsaw();
     const market = $("marketType")?.value || "ALL";
-    const response = await fetch(`${API_URL}/api/scan?date=${date}&market=${encodeURIComponent(market)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
+    const response = await fetch(`${API_URL}/api/scan?date=${date}&market=${encodeURIComponent(market)}&sport=${encodeURIComponent(sport)}`, { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (data.error === "SPORTS_ADDON_REQUIRED") throw new Error("BSD wymaga aktywnego dodatku Sports Addon dla tego sportu.");
+      if (data.error === "BSD_AUTH_REQUIRED") throw new Error("BSD odrzucił klucz API. Sprawdź konfigurację backendu.");
+      throw new Error(data.message || data.error || `HTTP ${response.status}`);
+    }
     if (!data || data.source !== "BSD") throw new Error("Backend zwrócił nieoczekiwany format danych.");
     localStorage.setItem("betAnalyzerLastScan", JSON.stringify(data));
-    renderCards(applyFilters(data.picks || []), data);
-    renderExchange(data);
+    let filtered = sport === "football"
+      ? applyFilters(data.picks || [])
+      : (data.picks || []).filter(p => Number(p.probability) >= Number($("minProb")?.value || 0)).slice(0, Math.max(1, Number($("limit")?.value || 10)));
+    if (boxId === "highOddsCards") {
+      const minOdds = Math.max(1.01, Number($("highOddsMin")?.value || 1.80));
+      filtered = filtered.filter(p => Number(p.odds) >= minOdds);
+    }
+    renderCards(filtered, data, boxId);
+    if (sport === "football") renderExchange(data);
     saveHistory(data);
     setStatus(`LIVE · ${data.qualifiedEvents ?? data.picks?.length ?? 0} kwalifikujących picków · ${date}`, true);
     renderHistory();
   } catch (error) {
     console.error("Błąd skanu:", error);
     setStatus("Błąd połączenia z backendem", false);
-    if ($("cards")) $("cards").innerHTML = `<div class="note" style="color:#b91c1c">Nie udało się wykonać skanu: ${escapeHtml(error.message)}</div>`;
+    if ($(boxId)) $(boxId).innerHTML = `<div class="note" style="color:#b91c1c">Nie udało się wykonać skanu: ${escapeHtml(error.message)}</div>`;
   } finally {
     if (button) {
       button.disabled = false;
@@ -213,6 +224,15 @@ function setupTabs() {
       const panel = $(tab.dataset.tab);
       if (panel) panel.classList.remove("hidden");
       if (tab.dataset.tab === "history") renderHistory();
+      if (tab.dataset.tab === "highOdds") {
+        const last = JSON.parse(localStorage.getItem("betAnalyzerLastScan") || "null");
+        if (last && last.sport !== "basketball" && last.sport !== "tennis") {
+          const minOdds = Math.max(1.01, Number($("highOddsMin")?.value || 1.80));
+          renderCards(applyFilters(last.picks || []).filter(p => Number(p.odds) >= minOdds), last, "highOddsCards");
+        } else scan("football", "highOddsCards", "scanHighOdds");
+      }
+      if (tab.dataset.tab === "basketball") scan("basketball", "basketballCards", "scanBasketball");
+      if (tab.dataset.tab === "tennis") scan("tennis", "tennisCards", "scanTennis");
     });
   });
 }
@@ -220,7 +240,17 @@ function setupTabs() {
 function setup() {
   setupTabs();
   if ($("backend")) $("backend").value = API_URL;
-  if ($("scan")) $("scan").addEventListener("click", scan);
+  if ($("scan")) $("scan").addEventListener("click", () => scan("football", "cards", "scan"));
+  if ($("scanHighOdds")) $("scanHighOdds").addEventListener("click", () => scan("football", "highOddsCards", "scanHighOdds"));
+  if ($("scanBasketball")) $("scanBasketball").addEventListener("click", () => scan("basketball", "basketballCards", "scanBasketball"));
+  if ($("scanTennis")) $("scanTennis").addEventListener("click", () => scan("tennis", "tennisCards", "scanTennis"));
+  if ($("highOddsMin")) $("highOddsMin").addEventListener("change", () => {
+    const last = JSON.parse(localStorage.getItem("betAnalyzerLastScan") || "null");
+    if (last && last.sport !== "basketball" && last.sport !== "tennis") {
+      const minOdds = Math.max(1.01, Number($("highOddsMin").value || 1.80));
+      renderCards(applyFilters(last.picks || []).filter(p => Number(p.odds) >= minOdds), last, "highOddsCards");
+    }
+  });
   if ($("save")) $("save").addEventListener("click", () => {
     const value = ($("backend").value || "").trim().replace(/\/$/, "");
     if (!value) return;
@@ -231,7 +261,13 @@ function setup() {
   ["minProb", "limit", "marketType"].forEach(id => {
     if ($(id)) $(id).addEventListener("change", () => {
       const last = JSON.parse(localStorage.getItem("betAnalyzerLastScan") || "null");
-      if (last) renderCards(applyFilters(last.picks || []));
+      if (last) {
+        const active = document.querySelector(".tab.active")?.dataset.tab || "scanner";
+        if (active === "highOdds") {
+          const minOdds = Math.max(1.01, Number($("highOddsMin")?.value || 1.80));
+          renderCards(applyFilters(last.picks || []).filter(p => Number(p.odds) >= minOdds), last, "highOddsCards");
+        } else if (active === "scanner") renderCards(applyFilters(last.picks || []), last, "cards");
+      }
     });
   });
   if ($("refresh")) $("refresh").addEventListener("change", scheduleRefresh);
