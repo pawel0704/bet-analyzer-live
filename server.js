@@ -21,7 +21,7 @@ const MAX_SCAN_EVENTS = Math.min(100, Math.max(1, Number(process.env.MAX_SCAN_EV
 const MAX_PICKS = Math.min(10, Math.max(1, Number(process.env.MAX_PICKS || 10)));
 const ENRICH_LIMIT = Math.min(20, Math.max(0, Number(process.env.ENRICH_LIMIT || 12)));
 const MIN_PROBABILITY = Number(process.env.MIN_PROBABILITY || 58);
-const MIN_EDGE = Number(process.env.MIN_EDGE || 1.5);
+const MIN_EDGE = Number(process.env.MIN_EDGE ?? 0);
 const MIN_SCORE = Number(process.env.MIN_SCORE || 68);
 const MIN_ODDS = Number(process.env.MIN_ODDS || 1.20);
 const MAX_PICKS_PER_MARKET = Math.max(1, Number(process.env.MAX_PICKS_PER_MARKET || 3));
@@ -770,7 +770,7 @@ async function scan(date, marketType = "ALL") {
   // Only candidates that survived the full contextual audit can become final picks.
   // This prevents a raw model/odds candidate from bypassing lineup/form/H2H checks.
   const enrichedCandidates = preliminary;
-  const candidateAudit = enrichedCandidates
+  const candidateAudit = allCandidates
     .slice()
     .sort((a, b) => b.candidate.probability - a.candidate.probability || b.candidate.score - a.candidate.score || b.candidate.edge - a.candidate.edge)
     .map(item => {
@@ -815,7 +815,18 @@ async function scan(date, marketType = "ALL") {
     if (picks.length >= MAX_PICKS) break;
   }
   const reasons = {};
-  for (const result of results) if (result.status !== "QUALIFIED") reasons[result.reason || "NO_QUALIFIED_PICK"] = (reasons[result.reason || "NO_QUALIFIED_PICK"] || 0) + 1;
+  for (const result of results) {
+    if (result.status !== "ANALYZED") {
+      const reason = result.reason || "NO_QUALIFIED_PICK";
+      reasons[reason] = (reasons[reason] || 0) + 1;
+    }
+  }
+  for (const item of candidateAudit) {
+    for (const reason of item.reasons) reasons[reason] = (reasons[reason] || 0) + 1;
+  }
+  if (picks.length === 0 && candidateAudit.length > 0) {
+    reasons.NO_QUALIFIED_PICK = results.filter(r => r.status === "ANALYZED").length;
+  }
   return {
     source: SOURCE, version: VERSION, date, generatedAt: nowIso(), scannedEvents: selected.length, analyzedEvents: results.length,
     predictionRecords: predictionMap.size, qualifiedEvents: picks.length, picks,
