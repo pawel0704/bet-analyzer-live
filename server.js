@@ -23,6 +23,8 @@ const ENRICH_LIMIT = Math.min(20, Math.max(0, Number(process.env.ENRICH_LIMIT ||
 const MIN_PROBABILITY = Number(process.env.MIN_PROBABILITY || 58);
 const MIN_EDGE = Number(process.env.MIN_EDGE || 1.5);
 const MIN_SCORE = Number(process.env.MIN_SCORE || 68);
+const MIN_ODDS = Number(process.env.MIN_ODDS || 1.20);
+const MAX_PICKS_PER_MARKET = Math.max(1, Number(process.env.MAX_PICKS_PER_MARKET || 3));
 const WOM_MIN_VOLUME = Number(process.env.WOM_MIN_VOLUME || 5000);
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 12000);
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 120000);
@@ -675,6 +677,7 @@ function qualify(candidate) {
   const strongProbability = candidate.probability >= 70;
   const requiredScore = strongProbability ? Math.min(MIN_SCORE, 62) : MIN_SCORE;
   return candidate.probability >= MIN_PROBABILITY &&
+    candidate.odds >= MIN_ODDS &&
     candidate.score >= requiredScore &&
     candidate.marketMovement.movement !== "DRIFTING";
 }
@@ -785,12 +788,17 @@ async function scan(date, marketType = "ALL") {
     });
   const picks = [];
   const usedEvents = new Set();
+  const picksPerMarket = new Map();
   for (const item of enrichedCandidates.sort((a, b) => b.candidate.probability - a.candidate.probability || b.candidate.score - a.candidate.score || b.candidate.edge - a.candidate.edge)) {
     const c = item.candidate;
     if (!qualify(c)) continue;
     const eventId = String(item.result.event.id);
     if (usedEvents.has(eventId)) continue;
+    // In the general scan, avoid filling the entire list with one market.
+    // Explicit market filters remain free to return multiple picks of that market.
+    if (marketType === "ALL" && (picksPerMarket.get(c.key) || 0) >= MAX_PICKS_PER_MARKET) continue;
     usedEvents.add(eventId);
+    picksPerMarket.set(c.key, (picksPerMarket.get(c.key) || 0) + 1);
     picks.push({ ...c, event: item.result.event, exchange: c.exchange ?? findWom(item.result.exchange, c.key === "BTTS" ? "BTTS_YES" : c.key) });
     if (picks.length >= MAX_PICKS) break;
   }
