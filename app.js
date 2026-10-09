@@ -79,11 +79,35 @@ function scheduleRefresh() {
   window.betAnalyzerRefresh = setInterval(() => { if (!document.hidden) scan(); }, seconds * 1000);
 }
 
-function renderCards(picks) {
+function renderCards(picks, scanData = {}) {
   const box = $("cards");
   if (!box) return;
   if (!picks.length) {
-    box.innerHTML = '<div class="note">Brak kwalifikujących się picków dla wybranego dnia.</div>';
+    const diagnostics = scanData.diagnostics || {};
+    const reasonCounts = diagnostics.reasons && typeof diagnostics.reasons === "object"
+      ? Object.entries(diagnostics.reasons).sort((a, b) => Number(b[1]) - Number(a[1]))
+      : [];
+    const reasonHtml = reasonCounts.length
+      ? '<p><strong>Najczęstsze powody odrzucenia:</strong></p><ul>' +
+        reasonCounts.slice(0, 8).map(([reason, count]) =>
+          '<li>' + escapeHtml(reason) + ': ' + escapeHtml(count) + '</li>'
+        ).join("") + '</ul>'
+      : '<p>Backend nie zwrócił szczegółowych powodów odrzucenia.</p>';
+    const audit = Array.isArray(diagnostics.candidateAudit) ? diagnostics.candidateAudit
+      : Array.isArray(scanData.candidateAudit) ? scanData.candidateAudit : [];
+    const auditHtml = audit.length
+      ? '<p><strong>Przykładowe analizowane mecze:</strong></p><ul>' +
+        audit.slice(0, 5).map(item => {
+          const name = eventName(item.event || item.match || item.teams || item);
+          const reasons = Array.isArray(item.reasons) ? item.reasons.join(", ")
+            : (item.reason || item.rejectionReason || item.status || "brak szczegółu");
+          return '<li>' + escapeHtml(name) + ' — ' + escapeHtml(reasons) + '</li>';
+        }).join("") + '</ul>'
+      : "";
+    box.innerHTML = '<div class="note"><strong>Brak kwalifikujących się picków.</strong>' +
+      '<p>Skan połączył się z backendem, ale żaden typ nie spełnił obecnych kryteriów.</p>' +
+      reasonHtml + auditHtml +
+      '<p>Nie obniżamy progów w ciemno — najpierw sprawdzamy, co odrzuca kandydatów.</p></div>';
     return;
   }
   box.innerHTML = picks.map((p, i) => {
@@ -123,7 +147,7 @@ async function scan() {
     const data = await response.json();
     if (!data || data.source !== "BSD") throw new Error("Backend zwrócił nieoczekiwany format danych.");
     localStorage.setItem("betAnalyzerLastScan", JSON.stringify(data));
-    renderCards(applyFilters(data.picks || []));
+    renderCards(applyFilters(data.picks || []), data);
     renderExchange(data);
     saveHistory(data);
     setStatus(`LIVE · ${data.qualifiedEvents ?? data.picks?.length ?? 0} kwalifikujących picków · ${date}`, true);
