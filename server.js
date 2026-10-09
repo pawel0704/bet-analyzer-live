@@ -766,6 +766,7 @@ async function scan(date, marketType = "ALL") {
       const c = item.candidate;
       const reasons = [];
       if (c.probability < MIN_PROBABILITY) reasons.push("LOW_PROBABILITY");
+      if (c.odds < MIN_ODDS) reasons.push("ODDS_TOO_LOW");
       if (c.edge < MIN_EDGE) reasons.push("LOW_EDGE");
       const requiredScore = c.probability >= 70 ? Math.min(MIN_SCORE, 62) : MIN_SCORE;
       if (c.score < requiredScore) reasons.push("LOW_SCORE");
