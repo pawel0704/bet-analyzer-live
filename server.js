@@ -678,6 +678,7 @@ function qualify(candidate) {
   const requiredScore = strongProbability ? Math.min(MIN_SCORE, 62) : MIN_SCORE;
   return candidate.probability >= MIN_PROBABILITY &&
     candidate.odds >= MIN_ODDS &&
+    candidate.edge >= MIN_EDGE &&
     candidate.score >= requiredScore &&
     candidate.marketMovement.movement !== "DRIFTING";
 }
@@ -885,7 +886,10 @@ function selfTest() {
   add("bsd_event_shape", bsdEventShape?.date === "2026-09-26T18:00:00Z" && bsdEventShape?.home?.id === 10 && bsdEventShape?.home?.name === "Home FC" && bsdEventShape?.away?.id === 20 && bsdEventShape?.away?.name === "Away FC");
   const womHistoryShape = normalizeWomData({ results: [{ money: [{ market: "1X2_AWAY_FT", volume: 12000, share: 72, price: 1.8, previous_price: 1.9, implied_probability: 55.56 }] }] });
   add("wom_results_shape", womHistoryShape.length === 1 && womHistoryShape[0].market === "1X2_AWAY_FT");
-  add("qualification_rejects_drift", qualify({ probability: 70, edge: 5, score: 90, marketMovement: { movement: "DRIFTING" } }) === false);
+  add("qualification_rejects_drift", qualify({ probability: 70, edge: 5, odds: 2, score: 90, marketMovement: { movement: "DRIFTING" } }) === false);
+  add("qualification_rejects_negative_edge", qualify({ probability: 75, edge: -4.8, odds: 1.25, score: 75, marketMovement: { movement: "UNKNOWN" } }) === false);
+  add("qualification_rejects_edge_below_minimum", qualify({ probability: 75, edge: 1.49, odds: 1.5, score: 75, marketMovement: { movement: "UNKNOWN" } }) === false);
+  add("qualification_accepts_edge_at_minimum", qualify({ probability: 75, edge: MIN_EDGE, odds: 1.5, score: 75, marketMovement: { movement: "UNKNOWN" } }) === true);
   return { version: VERSION, passed: tests.filter(t => t.pass).length, total: tests.length, ok: tests.every(t => t.pass), tests };
 }
 
