@@ -732,10 +732,27 @@ async function scan(date, marketType = "ALL") {
   const enrichmentPool = oddsEligible.length ? oddsEligible : allCandidates;
   const preliminary = enrichmentPool
     .sort((a, b) => {
-      if (!oddsEligible.length) return b.candidate.score - a.candidate.score;
-      const aOver15 = a.candidate.key === "OVER15" ? 1 : 0;
-      const bOver15 = b.candidate.key === "OVER15" ? 1 : 0;
-      return aOver15 - bOver15 || b.candidate.score - a.candidate.score || b.candidate.probability - a.candidate.probability;
+      const aCandidate = a.candidate;
+      const bCandidate = b.candidate;
+      // Spend the limited context-enrichment budget on candidates that can
+      // actually qualify, not merely on high-probability/low-value favorites.
+      const aRawEligible = aCandidate.probability >= MIN_PROBABILITY &&
+        aCandidate.odds >= MIN_ODDS &&
+        aCandidate.edge >= MIN_EDGE &&
+        aCandidate.marketMovement?.movement !== "DRIFTING";
+      const bRawEligible = bCandidate.probability >= MIN_PROBABILITY &&
+        bCandidate.odds >= MIN_ODDS &&
+        bCandidate.edge >= MIN_EDGE &&
+        bCandidate.marketMovement?.movement !== "DRIFTING";
+      if (aRawEligible !== bRawEligible) return Number(bRawEligible) - Number(aRawEligible);
+      // Among eligible candidates, prioritize real value (edge), then score
+      // and probability. Keep Over 1.5 from monopolizing the enrichment budget.
+      const aOver15 = aCandidate.key === "OVER15" ? 1 : 0;
+      const bOver15 = bCandidate.key === "OVER15" ? 1 : 0;
+      return bCandidate.edge - aCandidate.edge ||
+        aOver15 - bOver15 ||
+        bCandidate.score - aCandidate.score ||
+        bCandidate.probability - aCandidate.probability;
     })
     .slice(0, ENRICH_LIMIT);
   const uniqueEvents = [...new Map(preliminary.map(item => [String(item.result.event.id), item.result.event])).entries()];
@@ -899,7 +916,7 @@ function selfTest() {
   add("wom_results_shape", womHistoryShape.length === 1 && womHistoryShape[0].market === "1X2_AWAY_FT");
   add("qualification_rejects_drift", qualify({ probability: 70, edge: 5, odds: 2, score: 90, marketMovement: { movement: "DRIFTING" } }) === false);
   add("qualification_rejects_negative_edge", qualify({ probability: 75, edge: -4.8, odds: 1.25, score: 75, marketMovement: { movement: "UNKNOWN" } }) === false);
-  add("qualification_rejects_edge_below_minimum", qualify({ probability: 75, edge: 1.49, odds: 1.5, score: 75, marketMovement: { movement: "UNKNOWN" } }) === false);
+  add("qualification_rejects_edge_below_minimum", qualify({ probability: 75, edge: MIN_EDGE - 0.01, odds: 1.5, score: 75, marketMovement: { movement: "UNKNOWN" } }) === false);
   add("qualification_accepts_edge_at_minimum", qualify({ probability: 75, edge: MIN_EDGE, odds: 1.5, score: 75, marketMovement: { movement: "UNKNOWN" } }) === true);
   return { version: VERSION, passed: tests.filter(t => t.pass).length, total: tests.length, ok: tests.every(t => t.pass), tests };
 }
