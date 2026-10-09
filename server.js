@@ -724,8 +724,18 @@ async function scan(date, marketType = "ALL") {
   // Enrich the best raw candidates first. Multiple markets can belong to the
   // same event; fetch context once per event and share it across its candidates.
   const allCandidates = results.flatMap(r => arr(r.candidates).map(c => ({ candidate: c, result: r })));
-  const preliminary = allCandidates
-    .sort((a, b) => b.candidate.score - a.candidate.score)
+  // Prefer candidates whose odds can pass qualification. High-scoring Over 1.5
+  // picks at odds 1.03-1.17 previously consumed the enrichment budget and hid
+  // other markets. Keep the old score-first fallback for useful diagnostics.
+  const oddsEligible = allCandidates.filter(item => Number(item.candidate.odds) >= MIN_ODDS);
+  const enrichmentPool = oddsEligible.length ? oddsEligible : allCandidates;
+  const preliminary = enrichmentPool
+    .sort((a, b) => {
+      if (!oddsEligible.length) return b.candidate.score - a.candidate.score;
+      const aOver15 = a.candidate.key === "OVER15" ? 1 : 0;
+      const bOver15 = b.candidate.key === "OVER15" ? 1 : 0;
+      return aOver15 - bOver15 || b.candidate.score - a.candidate.score || b.candidate.probability - a.candidate.probability;
+    })
     .slice(0, ENRICH_LIMIT);
   const uniqueEvents = [...new Map(preliminary.map(item => [String(item.result.event.id), item.result.event])).entries()];
   const contextEntries = await Promise.all(uniqueEvents.map(async ([id, event]) => {
