@@ -89,6 +89,19 @@ function scheduleRefresh() {
 function renderCards(picks, scanData = {}, boxId = "cards") {
   const box = $(boxId);
   if (!box) return;
+  if (Array.isArray(scanData.matches)) {
+    const matches = scanData.matches;
+    box.innerHTML = '<div class="note"><strong>' + (matches.length ? 'Terminarz z SportScore' : 'Brak meczów w źródle dla wybranego dnia') + '</strong><p>' +
+      escapeHtml(scanData.note || 'Dane terminarza; kursy i niezależne prognozy nie są dostępne w tym źródle.') +
+      ' · <a href="https://sportscore.com/" target="_blank" rel="noopener noreferrer">Powered by SportScore</a></p></div>' +
+      (matches.length ? matches.map((m, i) => '<article class="card"><h3>#' + (i + 1) + ' ' + escapeHtml(m.event || ((m.home?.name || '') + ' – ' + (m.away?.name || ''))) + '</h3>' +
+        '<p><strong>Liga / turniej:</strong> ' + escapeHtml(m.league || (scanData.sport === 'tennis' ? 'Tenis' : 'Koszykówka')) + '</p>' +
+        '<p><strong>Status:</strong> ' + escapeHtml(m.status || 'Nadchodzący') + '</p>' +
+        (m.date ? '<p><strong>Termin:</strong> ' + escapeHtml(new Date(m.date).toLocaleString('pl-PL')) + '</p>' : '') +
+        ((m.homeScore !== null && m.awayScore !== null) ? '<p><strong>Wynik:</strong> ' + escapeHtml(m.homeScore) + ' : ' + escapeHtml(m.awayScore) + '</p>' : '') +
+        '<p class="note">Brak potwierdzonych kursów — nie jest to typ bukmacherski.</p></article>').join('') : '<div class="note">Źródło nie zwróciło meczów. Nie wygenerowano fikcyjnych typów.</div>');
+    return;
+  }
   if (!picks.length) {
     if (boxId === "highOddsCards" && Array.isArray(scanData.picks) && scanData.picks.length) {
       const minOdds = Math.max(1.01, Number($("highOddsMin")?.value || 1.80));
