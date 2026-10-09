@@ -713,9 +713,9 @@ async function scan(date, marketType = "ALL") {
   // Keep batches bounded, but avoid serially waiting on every five-event group.
   // Each event can require several BSD requests, so larger batches reduce scan
   // time substantially without opening all 40+ events at once.
-  for (let i = 0; i < selected.length; i += 10) {
-    const batch = selected.slice(i, i + 10);
-    results.push(...await Promise.all(batch.map(e => analyzeEvent(e, predictionMap).catch(error => ({ event: e, status: "ERROR", reason: error.code || error.message || "ANALYZE_ERROR" })))));
+  for (let i = 0; i < selected.length; i += 20) {
+    const batch = selected.slice(i, i + 20);
+    results.push(...await Promise.all(batch.map(e => analyzeEvent(e, predictionMap, marketType).catch(error => ({ event: e, status: "ERROR", reason: error.code || error.message || "ANALYZE_ERROR" })))));
   }
 
   // Enrich the best raw candidates first. Multiple markets can belong to the
