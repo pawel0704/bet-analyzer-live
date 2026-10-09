@@ -17,7 +17,10 @@
 </header>
 <main>
   <nav class="toolbar">
-    <button class="tab active" data-tab="scanner">Scanner</button>
+    <button class="tab active" data-tab="scanner">Piłka nożna</button>
+    <button class="tab" data-tab="highOdds">Wyższe kursy</button>
+    <button class="tab" data-tab="basketball">Koszykówka</button>
+    <button class="tab" data-tab="tennis">Tenis</button>
     <button class="tab" data-tab="exchange">Exchange</button>
     <button class="tab" data-tab="history">Historia</button>
     <button class="tab" data-tab="settings">Ustawienia</button>
@@ -40,6 +43,30 @@
     </div>
     <p class="note">LIVE pokazuje ranking rzeczywiście dostępnych danych BSD. Filtr prawdopodobieństwa działa lokalnie na wynikach skanu. Ujemny edge jest informacyjny i nie usuwa automatycznie mocnego picku.</p>
     <div id="cards"></div>
+  </section>
+
+  <section id="highOdds" class="panel hidden">
+    <h2>Typy z wyższymi kursami</h2>
+    <p class="note">Osobna lista piłki nożnej z kursem co najmniej ustawionym poniżej. To filtr kursu, nie gwarancja większej skuteczności.</p>
+    <label>Minimalny kurs
+      <input id="highOddsMin" type="number" value="1.80" min="1.01" max="100" step="0.05">
+    </label>
+    <button id="scanHighOdds" class="primary">Skanuj wyższe kursy</button>
+    <div id="highOddsCards"></div>
+  </section>
+
+  <section id="basketball" class="panel hidden">
+    <h2>Koszykówka</h2>
+    <p class="note">Typy na zwycięstwo gospodarzy lub gości na podstawie prognoz i kursów BSD. Wymaga dostępu do Basketball API.</p>
+    <button id="scanBasketball" class="primary">Skanuj koszykówkę</button>
+    <div id="basketballCards"></div>
+  </section>
+
+  <section id="tennis" class="panel hidden">
+    <h2>Tenis</h2>
+    <p class="note">Typy na zwycięzcę meczu na podstawie prognoz i kursów BSD. Wymaga dostępu do Tennis API.</p>
+    <button id="scanTennis" class="primary">Skanuj tenis</button>
+    <div id="tennisCards"></div>
   </section>
 
   <section id="exchange" class="panel hidden">
@@ -66,6 +93,6 @@
     <p class="note">Klucze Sportmonks/Betfair wpisuje się wyłącznie jako zmienne środowiskowe backendu. Nie wkładaj ich do GitHuba ani do PWA.</p>
   </section>
 </main>
-<script src="app.js?v=20261009-negativeedge5"></script>
+<script src="app.js?v=20261009-multisport1"></script>
 </body>
 </html>
